@@ -2,6 +2,27 @@ import torch
 from torch import nn as nn
 from torch.nn import functional as F
 from unet3d.config import load_config
+from torch.nn import init
+
+# initalize the module
+def init_weights(net, init_type='normal'):
+    # print('initialization method [%s]' % init_type)
+    if init_type == 'kaiming':
+        net.apply(weights_init_kaiming)
+    else:
+        raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
+
+
+def weights_init_kaiming(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+    elif classname.find('Linear') != -1:
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+    elif classname.find('BatchNorm') != -1:
+        init.normal_(m.weight.data, 1.0, 0.02)
+        init.constant_(m.bias.data, 0.0)
+
 
 def conv3d(in_channels, out_channels, kernel_size, bias, padding=1, stride=1):
     return nn.Conv3d(in_channels, out_channels, kernel_size, padding=padding, bias=bias, stride=stride)
