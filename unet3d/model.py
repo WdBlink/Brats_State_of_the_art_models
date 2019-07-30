@@ -8,36 +8,8 @@ import matplotlib.pyplot as plt
 import random
 
 from unet3d.buildingblocks import conv3d, Encoder, Decoder, FinalConv, DoubleConv, \
-    ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock, unetUp, unetConv3
+    ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock
 from unet3d.utils import create_feature_maps
-
-
-# initalize the module
-def init_weights(net, init_type='normal'):
-    # print('initialization method [%s]' % init_type)
-    if init_type == 'kaiming':
-        net.apply(weights_init_kaiming)
-    else:
-        raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
-
-
-def weights_init_kaiming(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
-    elif classname.find('Linear') != -1:
-        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
-    elif classname.find('BatchNorm') != -1:
-        init.normal_(m.weight.data, 1.0, 0.02)
-        init.constant_(m.bias.data, 0.0)
-
-
-# compute model params
-def count_param(model):
-    param_count = 0
-    for param in model.parameters():
-        param_count += param.view(-1).size()[0]
-    return param_count
 
 
 class UNet3D(nn.Module):
@@ -515,20 +487,30 @@ class EndToEndDTUNet3D(nn.Module):
         return self.dt_net(x)
 
 
+class TestTheNet(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(TestTheNet, self).__init__()
+
+        self.greenblock = GreenBlock(in_channels, out_channels)
+
+    def forward(self, x):
+        x = self.greenblock(x)
+        return x
+
+
 class VaeUNet(nn.Module):
-    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='cbr', num_groups=8,
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='cgr', num_groups=8,
                  **kwargs):
         super(VaeUNet, self).__init__()
         self.conv3d = conv3d(in_channels, 32, kernel_size=3, bias=True)
         self.dropout = nn.Dropout(p=0.2)
-        self.convblock = SingleConv(32, 32, order=layer_order, kernel_size=3)
+        self.convblock = SingleConv(32, 32)
         self.downblock1 = DownBlock(32, 16)
         self.downblock2 = DownBlock(16, 32)
         self.downblock3 = DownBlock(32, 64)
-
         self.greenblock1 = GreenBlock(64, 64)
         self.greenblock2 = GreenBlock(64, 64)
-
         self.upblock1 = UpBlock(64, 32)
         self.convblock1 = SingleConv(96, 32, order=layer_order, num_groups=num_groups)
         self.convblock2 = SingleConv(32, 32, order=layer_order, num_groups=num_groups)
@@ -546,13 +528,6 @@ class VaeUNet(nn.Module):
             self.final_activation = nn.Sigmoid()
         else:
             self.final_activation = nn.Softmax(dim=1)
-
-        # initialise weights
-        for m in self.modules():
-            if isinstance(m, nn.Conv3d):
-                init_weights(m, init_type='kaiming')
-            elif isinstance(m, nn.BatchNorm3d):
-                init_weights(m, init_type='kaiming')
 
     def forward(self, x):
         x = self.conv3d(x)
@@ -589,7 +564,90 @@ class VaeUNet(nn.Module):
         return output, vae_out, z_mean, z_var
 
 
+
+# initalize the module
+def init_weights(net, init_type='normal'):
+    # print('initialization method [%s]' % init_type)
+    if init_type == 'kaiming':
+        net.apply(weights_init_kaiming)
+    else:
+        raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
+
+def weights_init_kaiming(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+    elif classname.find('Linear') != -1:
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+    elif classname.find('BatchNorm') != -1:
+        init.normal_(m.weight.data, 1.0, 0.02)
+        init.constant_(m.bias.data, 0.0)
+
+# compute model params
+def count_param(model):
+    param_count = 0
+    for param in model.parameters():
+        param_count += param.view(-1).size()[0]
+    return param_count
+
+class unetConv3(nn.Module):
+
+    def __init__(self, in_size, out_size, is_batchnorm, n=2, ks=3, stride=1, padding=1):
+        super(unetConv3, self).__init__()
+        self.n = n
+
+        if is_batchnorm:
+            for i in range(1, n+1):
+                conv = nn.Sequential(nn.Conv3d(in_size, out_size, ks, stride, padding),
+                                     nn.BatchNorm3d(out_size),
+                                     nn.ReLU(inplace=True))
+                setattr(self, 'conv%d'%i, conv)
+                in_size = out_size
+        else:
+            for i in range(1, n+1):
+                conv = nn.Sequential(nn.Conv3d(in_size, out_size, ks, stride, padding),
+                                     nn.ReLU(inplace=True))
+                setattr(self, 'conv%d'%i, conv)
+                in_size = out_size
+
+        for m in self.children():
+            init_weights(m, 'kaiming')
+
+    def forward(self, input):
+        x = input
+        for i in range(1, self.n+1):
+            conv = getattr(self, 'conv%d'%i)
+            x = conv(x)
+
+        return x
+
+class unetUp(nn.Module):
+
+    def __init__(self, in_size, out_size, is_deconv=False, n_concat=2):
+        super(unetUp, self).__init__()
+        self.conv = unetConv3(in_size+(n_concat-2)*out_size, out_size, is_batchnorm=False)
+        if is_deconv:
+            self.up = nn.ConvTranspose3d(in_size, out_size, kernel_size=2, stride=2, padding=0)
+        else:
+            self.up = nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='trilinear'),
+                nn.Conv3d(in_size, out_size, kernel_size=1)
+            )
+
+        for m in self.children():
+            if m.__class__.__name__.find('unetConv3') != -1:continue
+            init_weights(m, init_type='kaiming')
+
+    def forward(self, high_feature, *low_feature):
+
+        outputs0 = self.up(high_feature)
+        for feature in low_feature:
+            outputs0 = torch.cat([outputs0, feature], 1)
+        return self.conv(outputs0)
+
+
 class UNet_Nested(nn.Module):
+
     def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='cgr', num_groups=8,
                 n_classes=4, feature_scale=3, is_deconv=False, is_batchnorm=True, is_ds=True, ** kwargs):
 
@@ -598,7 +656,7 @@ class UNet_Nested(nn.Module):
         self.feature_scale = feature_scale
         self.is_deconv = is_deconv
         self.is_batchnorm = is_batchnorm
-        self.is_ds = is_ds   # deep supervision
+        self.is_ds = is_ds                    # deep supervision
 
         filters = [64, 128, 256, 512, 1024]
         filters = [int(x / self.feature_scale) for x in filters]
