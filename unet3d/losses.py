@@ -76,7 +76,6 @@ class DiceLoss(nn.Module):
         return torch.mean(1. - per_channel_dice)
 
 
-<<<<<<< HEAD
 class SurfaceLoss(nn.Module):
     def __init__(self, **kwargs):
         super(SurfaceLoss, self).__init__()
@@ -100,8 +99,6 @@ class SurfaceLoss(nn.Module):
         return loss
 
 
-=======
->>>>>>> temp
 class OhemDiceLoss(nn.Module):
     def __init__(self, ohem_ratio=0.7 , weight=None, ignore_index=-100,
                  eps=1e-7):

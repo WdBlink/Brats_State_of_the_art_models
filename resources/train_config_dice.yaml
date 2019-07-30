@@ -19,11 +19,7 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-<<<<<<< HEAD
   checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/vae_model_kaiming_swa_DataAug_boudaryloss/
-=======
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/vae_model_kaiming_swa_DataAug/
->>>>>>> temp
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # how many iterations between validations
@@ -60,11 +56,7 @@ eval_metric:
 lr_scheduler:
   name: ExponentialLR
   #milestones: [10, 30, 60]
-<<<<<<< HEAD
   gamma: 0.99
-=======
-  gamma: 0.2
->>>>>>> temp
 # data loaders configuration
 loaders:
   # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
