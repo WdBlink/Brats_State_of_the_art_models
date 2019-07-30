@@ -74,6 +74,29 @@ class DiceLoss(nn.Module):
         return torch.mean(1. - per_channel_dice)
 
 
+class OhemDiceLoss(nn.Module):
+    def __init__(self, ohem_ratio=0.7 , weight=None, ignore_index=-100,
+                 eps=1e-7):
+        super(OhemDiceLoss, self).__init__()
+        self.ignore_label = ignore_index
+        self.criterion = DiceLoss()
+        self.ohem_ratio = ohem_ratio
+        self.eps = eps
+
+    def forward(self, pred, target):
+        loss = self.criterion(pred, target)
+        mask = self._ohem_mask(loss, self.ohem_ratio)
+        loss = loss * mask
+        return loss.sum() / (mask.sum() + self.eps)
+
+    def _ohem_mask(self, loss, ohem_ratio):
+        with torch.no_grad():
+            values, _ = torch.topk(loss.reshape(-1),
+                                   int(loss.nelement() * ohem_ratio))
+            mask = loss >= values[-1]
+        return mask.float()
+
+
 class VaeLoss(nn.Module):
     """
     loss(input_shape, inp, out_VAE, z_mean, z_var, e=1e-8, weight_L2=0.1, weight_KL=0.1)
@@ -448,6 +471,8 @@ def get_loss_criterion(config):
         return L1Loss()
     elif name == 'VaeLoss':
         return VaeLoss()
+    elif name == 'OhemDiceLoss':
+        return OhemDiceLoss()
     else:
         raise RuntimeError(f"Unsupported loss function: '{name}'. Supported losses: {SUPPORTED_LOSSES}")
 

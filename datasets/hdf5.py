@@ -115,7 +115,20 @@ class BraTSDataset(Dataset):
     """
     Implementation of torch.utils.data.Dataset backed by the BRATS files, which iterates over the raw and label
     """
-    def __init__(self, loader, patient_ids):
+    def __init__(self, loader, patient_ids, transformer_config, phase):
+
+        self.transformer = transforms.get_transformer(transformer_config, mean=0.5, std=0.5, phase=phase)
+
+        if phase != 'test':
+            # create label/weight transform only in train/val phase
+            self.label_transform = self.transformer.label_transform()
+        else:
+            # 'test' phase used only for predictions so ignore the label dataset
+            self.labels = None
+            self.weight_maps = None
+
+        self.raw_transform = self.transformer.raw_transform()
+
         self.loader = loader
         self.train_datasets = self.build_dataset_list(patient_ids)
         self.count = len(self.train_datasets)
@@ -123,21 +136,43 @@ class BraTSDataset(Dataset):
     def __getitem__(self, index):
         if index >= len(self):
             raise StopIteration
-        self.patient = self.loader.patient(self.train_datasets[index])
-        images = self.make_crop(self.patient.mri)
+        patient = self.loader.patient(self.train_datasets[index])
+        images = self.make_crop(patient.mri)
+        mri_transformed = self.mri_transform(images, self.raw_transform)
 
         # transforms the mri to range of -1~1
-        image_max = np.max(images)
+        image_max = mri_transformed.max()
         self.transforms = transforms.Compose(
-            [transforms.ToTensor(expand_dims=True),
+            [
              transforms.RangeNormalize(max_value=image_max),
              transforms.Normalize(std=0.5, mean=0.5)])
-        images = self.transforms(images)
+        images = self.transforms(mri_transformed)
 
         # print(self.train_datasets[index])
-        labels = self.make_crop(self.patient.seg)
+        labels = self.make_crop(patient.seg)
         labels = self.make_one_hot(labels)
-        return images, labels
+        label_transformed = self.mri_transform(labels, self.label_transform)
+        return images, label_transformed
+
+    @staticmethod
+    def mri_transform(data, transformer):
+        transformed_channels = []
+        # get the label data and apply the label transformer
+        for i in range(data.shape[0]):
+            m = data[i, :, :, :]
+            transformed_channel = transformer(m)
+            transformed_channels.append(transformed_channel)
+
+        mri_transformed = transformed_channels[0]
+        for i in range(len(transformed_channels)-1):
+            mri_transformed = torch.cat((mri_transformed, transformed_channels[i+1]), 0)
+        return mri_transformed
+
+    @staticmethod
+    def seg_transform(data, transformer):
+        # get the label data and apply the label transformer
+        transformed_channel = transformer(data)
+        return transformed_channel
 
     def __len__(self):
         return self.count
@@ -159,6 +194,16 @@ class BraTSDataset(Dataset):
     def make_crop(input):
         image = input[..., 40:200, 24:216, 13:141]
         return image
+
+    @staticmethod
+    def _calculate_mean_std(input):
+        """
+        Compute a mean/std of the raw stack for normalization.
+        This is an in-memory implementation, override this method
+        with the chunk-based computation if you're working with huge H5 files.
+        :return: a tuple of (mean, std) of the raw data
+        """
+        return input.mean(keepdims=True), input.std(keepdims=True)
 
 
 class HDF5Dataset(Dataset):
@@ -420,18 +465,18 @@ def get_brats_train_loaders(config):
     # print(f'loss file num is {loss_file_num}')
 
     logger.info(f'Loading training set from: {data_paths}...')
-    train_datasets = BraTSDataset(brats, train_ids)
+    train_datasets = BraTSDataset(brats, train_ids, phase='train', transformer_config=loaders_config['transformer'])
 
     logger.info(f'Loading validation set from: {data_paths}...')
     brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train
-    val_datasets = BraTSDataset(brats, validation_ids)
+    val_datasets = BraTSDataset(brats, validation_ids, phase='val', transformer_config=loaders_config['transformer'])
 
     num_workers = loaders_config.get('num_workers', 1)
     logger.info(f'Number of workers for train/val datasets: {num_workers}')
     # when training with volumetric data use batch_size of 1 due to GPU memory constraints
     return {
-        'train': DataLoader(train_datasets, batch_size=1, shuffle=True, num_workers=num_workers),
-        'val': DataLoader(val_datasets, batch_size=1, shuffle=True, num_workers=num_workers)
+        'train': DataLoader(train_datasets, batch_size=1, shuffle=False, num_workers=num_workers),
+        'val': DataLoader(val_datasets, batch_size=1, shuffle=False, num_workers=num_workers)
     }
 #
 # import os

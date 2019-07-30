@@ -3,6 +3,7 @@ import importlib
 import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+import torchcontrib
 
 import BraTS
 from datasets.hdf5 import get_train_loaders, get_brats_train_loaders
@@ -55,10 +56,16 @@ def _create_trainer(config, model, optimizer, lr_scheduler, loss_criterion, eval
 def _create_optimizer(config, model):
     assert 'optimizer' in config, 'Cannot find optimizer configuration'
     optimizer_config = config['optimizer']
-    learning_rate = optimizer_config['learning_rate']
-    weight_decay = optimizer_config['weight_decay']
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    # optimizer = optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    if optimizer_config['mode'] == 'Adam':
+        learning_rate = optimizer_config['learning_rate']
+        weight_decay = optimizer_config['weight_decay']
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        # optimizer = optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    elif optimizer_config['mode'] == 'SWA':
+        learning_rate = optimizer_config['learning_rate']
+        weight_decay = optimizer_config['weight_decay']
+        base_opt = optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay, momentum=0.9)
+        optimizer = torchcontrib.optim.SWA(base_opt, swa_start=10, swa_freq=5, swa_lr=0.05)
     return optimizer
 
 
@@ -78,7 +85,7 @@ def _create_lr_scheduler(config, optimizer):
 
 def main():
     # Create main logger
-    logger = get_logger('UNet3DTrainer')
+    logger = get_logger('VaeUnetTrainer')
 
     # Load and log experiment configuration
     config = load_config()
@@ -112,8 +119,8 @@ def main():
     optimizer = _create_optimizer(config, model)
 
     # Create learning rate adjustment strategy
-    # lr_scheduler = _create_lr_scheduler(config, optimizer)
-    lr_scheduler = None
+    lr_scheduler = _create_lr_scheduler(config, optimizer)
+    # lr_scheduler = None
     # Create model trainer
     trainer = _create_trainer(config, model=model, optimizer=optimizer, lr_scheduler=lr_scheduler,
                               loss_criterion=loss_criterion, eval_criterion=eval_criterion, loaders=loaders,

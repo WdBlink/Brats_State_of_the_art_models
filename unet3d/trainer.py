@@ -4,6 +4,7 @@ import os
 import numpy as np
 import torch
 import datetime
+from unet3d.config import load_config
 from tensorboardX import SummaryWriter
 from visualization import board_add_image
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -47,10 +48,10 @@ class UNet3DTrainer:
                  eval_score_higher_is_better=True, best_eval_score=None,
                  logger=None):
         if logger is None:
-            self.logger = utils.get_logger('UNet3DTrainer', level=logging.DEBUG)
+            self.logger = utils.get_logger('VaeUnetTrainer', level=logging.DEBUG)
         else:
             self.logger = logger
-
+        self.config = load_config()
         self.logger.info(model)
         self.model = model
         self.optimizer = optimizer
@@ -67,7 +68,7 @@ class UNet3DTrainer:
         self.log_after_iters = log_after_iters
         self.validate_iters = validate_iters
         self.eval_score_higher_is_better = eval_score_higher_is_better
-        logger.info(f'eval_score_higher_is_better: {eval_score_higher_is_better}')
+        self.logger.info(f'eval_score_higher_is_better: {eval_score_higher_is_better}')
 
         if best_eval_score is not None:
             self.best_eval_score = best_eval_score
@@ -143,7 +144,8 @@ class UNet3DTrainer:
 
             if should_terminate:
                 break
-
+            if self.config['optimizer']['mode'] == 'SWA':
+                self.optimizer.swap_swa_sgd()
             self.num_epoch += 1
 
     def train(self, train_loader):
@@ -162,13 +164,14 @@ class UNet3DTrainer:
         self.model.train()
 
         for i, t in enumerate(train_loader):
-            self.logger.info(
-                f'Training iteration {self.num_iterations}. Batch {i}. Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
 
             input, target, weight = self._split_training_batch(t)
-
             output, loss = self._forward_pass(input, target, weight)
-            print(f'train loss is {loss}')
+
+            self.logger.info(
+                f'Training iteration {self.num_iterations}. Batch {i}. '
+                f'Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]'
+                )
 
             train_losses.update(loss.item(), self._batch_size(input))
 
@@ -181,10 +184,10 @@ class UNet3DTrainer:
                 # evaluate on validation set
                 eval_score = self.validate(self.loaders['val'])
                 # adjust learning rate if necessary
-                # if isinstance(self.scheduler, ReduceLROnPlateau):
-                #     self.scheduler.step(eval_score)
-                # else:
-                    # self.scheduler.step()
+                if isinstance(self.scheduler, ReduceLROnPlateau):
+                    self.scheduler.step(eval_score)
+                else:
+                    self.scheduler.step()
                 # log current learning rate in tensorboard
                 self._log_lr()
                 # remember best validation metric
@@ -199,8 +202,8 @@ class UNet3DTrainer:
                 if hasattr(self.model, 'final_activation'):
                     output = self.model.final_activation(output)
 
-                #visualize the feature map
-                board_add_image(self.writer, 'feature map', output[0, 2, :, :, 64], self.num_iterations)
+                # visualize the feature map to tensorboard
+                board_add_image(self.writer, 'feature map', output[0:1, 1:4, :, :, 64], self.num_iterations)
 
                 # compute eval criterion
                 eval_score = self.eval_criterion(output, target)
@@ -213,7 +216,10 @@ class UNet3DTrainer:
                     f'Evaluation score WT:{train_eval_scores_multi.avg1}, '
                     f'TC:{train_eval_scores_multi.avg2}, '
                     f'ET:{train_eval_scores_multi.avg3}')
-                self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.avg1, train_eval_scores_multi.avg2, train_eval_scores_multi.avg3)
+                self._log_stats_multi('train', train_losses.avg,
+                                      train_eval_scores_multi.avg1,
+                                      train_eval_scores_multi.avg2,
+                                      train_eval_scores_multi.avg3)
                 self._log_params()
                 self._log_images(input, target, output)
 
