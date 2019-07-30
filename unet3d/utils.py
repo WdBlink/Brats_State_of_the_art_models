@@ -6,6 +6,21 @@ import scipy.sparse as sparse
 
 import numpy as np
 import torch
+from torch import Tensor
+
+
+def simplex(t: Tensor, axis=1) -> bool:
+    _sum = t.sum(axis).type(torch.float32)
+    _ones = torch.ones_like(_sum, dtype=torch.float32)
+    return torch.allclose(_sum, _ones)
+
+
+# def sset(a: Tensor, sub: Iterable) -> bool:
+#     return uniq(a).issubset(sub)
+#
+#
+# def one_hot(t: Tensor, axis=1) -> bool:
+#     return simplex(t, axis) and sset(t, [0, 1])
 
 
 def save_checkpoint(state, is_best, checkpoint_dir, logger=None):
@@ -24,16 +39,16 @@ def save_checkpoint(state, is_best, checkpoint_dir, logger=None):
             logger.info(message)
 
     if not os.path.exists(checkpoint_dir):
-        log_info(
+        logger.info(
             f"Checkpoint directory does not exists. Creating {checkpoint_dir}")
         os.mkdir(checkpoint_dir)
 
     last_file_path = os.path.join(checkpoint_dir, 'last_checkpoint.pytorch')
-    log_info(f"Saving last checkpoint to '{last_file_path}'")
+    logger.info(f"Saving last checkpoint to '{last_file_path}'")
     torch.save(state, last_file_path)
     if is_best:
         best_file_path = os.path.join(checkpoint_dir, 'best_checkpoint.pytorch')
-        log_info(f"Saving best checkpoint to '{best_file_path}'")
+        logger.info(f"Saving best checkpoint to '{best_file_path}'")
         shutil.copyfile(last_file_path, best_file_path)
 
 
@@ -70,8 +85,8 @@ def get_logger(name, level=logging.INFO):
     formatter = logging.Formatter(
         '%(asctime)s [%(threadName)s] %(levelname)s %(name)s - %(message)s')
     stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
-
+    # logger.addHandler(stream_handler)
+    # logger.removeHandler(stream_handler)
     return logger
 
 

@@ -9,7 +9,7 @@ model:
   # number of output channels
   out_channels: 4
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
-  layer_order: crg
+  layer_order: cbr
   # feature maps scale factor
   f_maps: 32
   # number of groups in the groupnorm
@@ -19,11 +19,11 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/vae_model_kaiming
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/vae_model_kaiming_swa_DataAug_boudaryloss/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # how many iterations between validations
-  validate_after_iters: 20
+  validate_after_iters: 50
   # how many iterations between tensorboard logging
   log_after_iters: 20
   # max number of epochs
@@ -34,10 +34,12 @@ trainer:
   eval_score_higher_is_better: True
 # optimizer configuration
 optimizer:
+  #mode
+  mode: SWA
   # initial learning rate
-  learning_rate: 0.0001
+  learning_rate: 0.00001
   # weight decay
-  weight_decay: 0.002
+  weight_decay: 0.003
 # loss function configuration
 loss:
   # loss function to be used during training
@@ -52,9 +54,9 @@ eval_metric:
   # a target label that is ignored during metric evaluation
   ignore_index: null
 lr_scheduler:
-  name: MultiStepLR
-  milestones: [10, 30, 60]
-  gamma: 0.2
+  name: ExponentialLR
+  #milestones: [10, 30, 60]
+  gamma: 0.99
 # data loaders configuration
 loaders:
   # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
@@ -85,7 +87,6 @@ loaders:
       raw:
         - name: Normalize
         - name: RandomFlip
-        - name: RandomRotate90
         - name: RandomRotate
           # rotate only in ZY only
           axes: [[2, 1]]
@@ -98,7 +99,6 @@ loaders:
           expand_dims: true
       label:
         - name: RandomFlip
-        - name: RandomRotate90
         - name: RandomRotate
           # rotate only in ZY only
           axes: [[2, 1]]

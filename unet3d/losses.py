@@ -3,6 +3,8 @@ import torch.nn.functional as F
 from torch import nn as nn
 from torch.autograd import Variable
 from torch.nn import MSELoss, SmoothL1Loss, L1Loss
+from torch import Tensor, einsum
+from unet3d.utils import simplex
 
 
 def compute_per_channel_dice(input, target, epsilon=1e-5, ignore_index=None, weight=None):
@@ -74,6 +76,52 @@ class DiceLoss(nn.Module):
         return torch.mean(1. - per_channel_dice)
 
 
+class SurfaceLoss(nn.Module):
+    def __init__(self, **kwargs):
+        super(SurfaceLoss, self).__init__()
+        # Self.idc is used to filter out some classes of the target mask. Use fancy indexing
+        # self.idc = 1
+        self.normalization = nn.Softmax(dim=1)
+        print(f"Initialized {self.__class__.__name__} with {kwargs}")
+
+    def __call__(self, probs: Tensor, dist_maps: Tensor) -> Tensor:
+        probs = self.normalization(probs)
+        assert simplex(probs)
+        # assert not one_hot(dist_maps)
+
+        pc = probs[:, 1:, ...].type(torch.float32)
+        dc = dist_maps[:, 1:, ...].type(torch.float32)
+
+        multipled = einsum("bcwhd,bcwhd->bcwhd", pc, dc)
+
+        loss = multipled.mean()
+
+        return loss
+
+
+class OhemDiceLoss(nn.Module):
+    def __init__(self, ohem_ratio=0.7 , weight=None, ignore_index=-100,
+                 eps=1e-7):
+        super(OhemDiceLoss, self).__init__()
+        self.ignore_label = ignore_index
+        self.criterion = DiceLoss()
+        self.ohem_ratio = ohem_ratio
+        self.eps = eps
+
+    def forward(self, pred, target):
+        loss = self.criterion(pred, target)
+        mask = self._ohem_mask(loss, self.ohem_ratio)
+        loss = loss * mask
+        return loss.sum() / (mask.sum() + self.eps)
+
+    def _ohem_mask(self, loss, ohem_ratio):
+        with torch.no_grad():
+            values, _ = torch.topk(loss.reshape(-1),
+                                   int(loss.nelement() * ohem_ratio))
+            mask = loss >= values[-1]
+        return mask.float()
+
+
 class VaeLoss(nn.Module):
     """
     loss(input_shape, inp, out_VAE, z_mean, z_var, e=1e-8, weight_L2=0.1, weight_KL=0.1)
@@ -124,7 +172,8 @@ class VaeLoss(nn.Module):
     """
     def __init__(self, weight_L2=0.1, weight_KL=0.1):
         super(VaeLoss, self).__init__()
-        self.dice = DiceLoss()
+        self.boundary_loss = SurfaceLoss()
+        self.dice_loss = DiceLoss()
         self.weight_L2 = weight_L2
         self.weight_KL = weight_KL
 
@@ -136,9 +185,10 @@ class VaeLoss(nn.Module):
         loss_KL = (1/n) * torch.sum(
             torch.exp(z_var) + torch.pow(z_mean, 2) - 1. - z_var)
 
-        loss_dice = self.dice(unet_out, label)
+        boundary_loss = self.boundary_loss(unet_out, label)
+        dice_loss = self.dice_loss(unet_out, label)
 
-        return loss_dice + self.weight_L2 * loss_L2 + self.weight_KL * loss_KL
+        return boundary_loss + dice_loss + self.weight_L2 * loss_L2 + self.weight_KL * loss_KL
 
 
 class GeneralizedDiceLoss(nn.Module):
@@ -448,6 +498,8 @@ def get_loss_criterion(config):
         return L1Loss()
     elif name == 'VaeLoss':
         return VaeLoss()
+    elif name == 'OhemDiceLoss':
+        return OhemDiceLoss()
     else:
         raise RuntimeError(f"Unsupported loss function: '{name}'. Supported losses: {SUPPORTED_LOSSES}")
 

@@ -24,10 +24,10 @@ def tensor_for_board(img_tensor):
     tensor = (img_tensor.clone()+1) * 0.5
     tensor.cpu().clamp(0, 1)
 
-    if tensor.size(1) == 1:
-        tensor = tensor.repeat(1, 3, 1, 1)
-    else:
-        tensor = tensor[:, [2, 1, 0], :, :]
+    # if tensor.size(1) == 1:
+    #     tensor = tensor.repeat(1, 3, 1, 1)
+    # else:
+    #     tensor = tensor[:, [2, 1, 0], :, :]
 
     return tensor
 
