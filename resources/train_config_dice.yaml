@@ -19,7 +19,7 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/vae_model_kaiming_swa_DataAug_boudaryloss/
+  checkpoint_dir: /home/liujing/bright-light-515_state_of_the_art_models/checkpoints/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # how many iterations between validations
@@ -78,7 +78,7 @@ loaders:
   val_path:
     - 'resources/random_label3D.h5'
   dataset_path:
-    - '/home/server/data'
+    - '/home/liujing/data/MICCAI_BraTS'
   # how many subprocesses to use for data loading
   num_workers: 8
   # data transformations/augmentations

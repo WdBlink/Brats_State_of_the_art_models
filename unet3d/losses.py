@@ -23,11 +23,14 @@ def compute_per_channel_dice(input, target, epsilon=1e-5, ignore_index=None, wei
 
     seg_pred = torch.reshape(input[0], [4, -1])
     seg_true = torch.reshape(target[0], [4, -1])
+    seg_pred = seg_pred.to(dtype=torch.float64)
+    seg_true = seg_true.to(dtype=torch.float64)
 
     seg_true = seg_true[:, 1:]
     seg_pred = seg_pred[:, 1:]
     # target = target.float()
     # Compute per channel Dice Coefficient
+
     intersect = (seg_pred * seg_true).sum(-1)
     if weight is not None:
         intersect = weight * intersect
