@@ -42,7 +42,7 @@ def tensor_list_for_board(img_tensors_list):
     grid_h = len(img_tensors_list)
     grid_w = max(len(img_tensors)  for img_tensors in img_tensors_list)
 
-    batch_size, channel, height, width = tensor_for_board(img_tensors_list[0][0]).size()
+    batch_size, channel, height, width = tensor_for_board(img_tensors_list[0]).size()
     canvas_h = grid_h * height
     canvas_w = grid_w * width
     canvas = torch.FloatTensor(batch_size, channel, canvas_h, canvas_w).fill_(0.5)

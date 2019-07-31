@@ -8,8 +8,36 @@ import matplotlib.pyplot as plt
 import random
 
 from unet3d.buildingblocks import conv3d, Encoder, Decoder, FinalConv, DoubleConv, \
-    ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock
+    ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock, unetUp, unetConv3
 from unet3d.utils import create_feature_maps
+
+
+# initalize the module
+def init_weights(net, init_type='normal'):
+    # print('initialization method [%s]' % init_type)
+    if init_type == 'kaiming':
+        net.apply(weights_init_kaiming)
+    else:
+        raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
+
+
+def weights_init_kaiming(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+    elif classname.find('Linear') != -1:
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+    elif classname.find('BatchNorm') != -1:
+        init.normal_(m.weight.data, 1.0, 0.02)
+        init.constant_(m.bias.data, 0.0)
+
+
+# compute model params
+def count_param(model):
+    param_count = 0
+    for param in model.parameters():
+        param_count += param.view(-1).size()[0]
+    return param_count
 
 
 class UNet3D(nn.Module):
@@ -487,30 +515,20 @@ class EndToEndDTUNet3D(nn.Module):
         return self.dt_net(x)
 
 
-class TestTheNet(nn.Module):
-    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
-                 **kwargs):
-        super(TestTheNet, self).__init__()
-
-        self.greenblock = GreenBlock(in_channels, out_channels)
-
-    def forward(self, x):
-        x = self.greenblock(x)
-        return x
-
-
 class VaeUNet(nn.Module):
-    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='cgr', num_groups=8,
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='cbr', num_groups=8,
                  **kwargs):
         super(VaeUNet, self).__init__()
         self.conv3d = conv3d(in_channels, 32, kernel_size=3, bias=True)
         self.dropout = nn.Dropout(p=0.2)
-        self.convblock = SingleConv(32, 32)
+        self.convblock = SingleConv(32, 32, order=layer_order, kernel_size=3)
         self.downblock1 = DownBlock(32, 16)
         self.downblock2 = DownBlock(16, 32)
         self.downblock3 = DownBlock(32, 64)
+
         self.greenblock1 = GreenBlock(64, 64)
         self.greenblock2 = GreenBlock(64, 64)
+
         self.upblock1 = UpBlock(64, 32)
         self.convblock1 = SingleConv(96, 32, order=layer_order, num_groups=num_groups)
         self.convblock2 = SingleConv(32, 32, order=layer_order, num_groups=num_groups)
@@ -528,6 +546,13 @@ class VaeUNet(nn.Module):
             self.final_activation = nn.Sigmoid()
         else:
             self.final_activation = nn.Softmax(dim=1)
+
+        # initialise weights
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                init_weights(m, init_type='kaiming')
+            elif isinstance(m, nn.BatchNorm3d):
+                init_weights(m, init_type='kaiming')
 
     def forward(self, x):
         x = self.conv3d(x)

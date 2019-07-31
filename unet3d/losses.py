@@ -23,9 +23,11 @@ def compute_per_channel_dice(input, target, epsilon=1e-5, ignore_index=None, wei
 
     seg_pred = torch.reshape(input[0], [4, -1])
     seg_true = torch.reshape(target[0], [4, -1])
+    # seg_pred = seg_pred.to(dtype=torch.float64)
+    # seg_true = seg_true.to(dtype=torch.float64)
 
-    seg_true = seg_true[:, 1:]
-    seg_pred = seg_pred[:, 1:]
+    seg_true = seg_true[:, 1:].to(dtype=torch.float32)
+    seg_pred = seg_pred[:, 1:].to(dtype=torch.float32)
     # target = target.float()
     # Compute per channel Dice Coefficient
     intersect = (seg_pred * seg_true).sum(-1)
@@ -97,6 +99,45 @@ class SurfaceLoss(nn.Module):
         loss = multipled.mean()
 
         return loss
+
+
+class DiceLoss_SurfaceLoss(nn.Module):
+    def __init__(self, epsilon=1e-5, weight=None, ignore_index=None, sigmoid_normalization=True,
+                 skip_last_target=False):
+        super(DiceLoss_SurfaceLoss, self).__init__()
+        self.surface_loss = SurfaceLoss()
+        self.epsilon = epsilon
+        self.register_buffer('weight', weight)
+        self.ignore_index = ignore_index
+        # The output from the network during training is assumed to be un-normalized probabilities and we would
+        # like to normalize the logits. Since Dice (or soft Dice in this case) is usually used for binary data,
+        # normalizing the channels with Sigmoid is the default choice even for multi-class segmentation problems.
+        # However if one would like to apply Softmax in order to get the proper probability distribution from the
+        # output, just specify sigmoid_normalization=False.
+        if sigmoid_normalization:
+            self.normalization = nn.Sigmoid()
+        else:
+            self.normalization = nn.Softmax(dim=1)
+        # if True skip the last channel in the target
+        self.skip_last_target = skip_last_target
+
+    def forward(self, input, target):
+        surface_loss = self.surface_loss(input, target)
+
+        # get probabilities from logits
+        input = self.normalization(input)
+        if self.weight is not None:
+            weight = Variable(self.weight, requires_grad=False)
+        else:
+            weight = None
+
+        if self.skip_last_target:
+            target = target[:, :-1, ...]
+
+        per_channel_dice = compute_per_channel_dice(input, target, epsilon=self.epsilon, ignore_index=self.ignore_index,
+                                                    weight=weight)
+        # Average the Dice score across all channels/classes
+        return torch.mean(1. - per_channel_dice) + surface_loss
 
 
 class OhemDiceLoss(nn.Module):
@@ -500,6 +541,8 @@ def get_loss_criterion(config):
         return VaeLoss()
     elif name == 'OhemDiceLoss':
         return OhemDiceLoss()
+    elif name == 'DiceLoss_SurfaceLoss':
+        return DiceLoss_SurfaceLoss()
     else:
         raise RuntimeError(f"Unsupported loss function: '{name}'. Supported losses: {SUPPORTED_LOSSES}")
 

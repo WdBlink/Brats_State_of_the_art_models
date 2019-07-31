@@ -3,23 +3,23 @@ manual_seed: 0
 # model configuration
 model:
   # model class
-  name: VaeUNet
+  name: UNet3D
   # number of input channels to the model
   in_channels: 4
   # number of output channels
   out_channels: 4
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
-  layer_order: cbr
+  layer_order: cgr
   # feature maps scale factor
   f_maps: 32
   # number of groups in the groupnorm
-  num_groups: 8
+  num_groups: 4
   # apply element-wise nn.Sigmoid after the final 1x1 convolution, otherwise apply nn.Softmax
   final_sigmoid: true
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/vae_model_kaiming_swa_DataAug_boudaryloss/
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/Unet_baseline/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # how many iterations between validations
@@ -37,13 +37,13 @@ optimizer:
   #mode
   mode: SWA
   # initial learning rate
-  learning_rate: 0.00001
+  learning_rate: 0.0001
   # weight decay
   weight_decay: 0.003
 # loss function configuration
 loss:
   # loss function to be used during training
-  name: VaeLoss
+  name: DiceLoss_SurfaceLoss
   # A manual rescaling weight given to each class.
   loss_weight: null
   # a target value that is ignored and does not contribute to the input gradient
@@ -80,7 +80,7 @@ loaders:
   dataset_path:
     - '/home/server/data'
   # how many subprocesses to use for data loading
-  num_workers: 8
+  num_workers: 2
   # data transformations/augmentations
   transformer:
     train:

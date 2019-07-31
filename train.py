@@ -119,8 +119,8 @@ def main():
     optimizer = _create_optimizer(config, model)
 
     # Create learning rate adjustment strategy
-    lr_scheduler = _create_lr_scheduler(config, optimizer)
-    # lr_scheduler = None
+    # lr_scheduler = _create_lr_scheduler(config, optimizer)
+    lr_scheduler = None
     # Create model trainer
     trainer = _create_trainer(config, model=model, optimizer=optimizer, lr_scheduler=lr_scheduler,
                               loss_criterion=loss_criterion, eval_criterion=eval_criterion, loaders=loaders,

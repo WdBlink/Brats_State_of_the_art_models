@@ -118,7 +118,6 @@ class DataSubSet:
         patient = Patient(patient_id)
         patient_dir = self.directory_map[patient_id]
 
-
         if self._mris is not None and self._segs is not None:
             # Load from _mris and _segs if possible
             index = self._id_indexer[patient_id]

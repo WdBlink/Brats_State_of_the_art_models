@@ -4,15 +4,17 @@ import os
 import numpy as np
 import torch
 import datetime
+from unet3d.config import load_config
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import matplotlib.pyplot as plt
 from preprocess.partitioning import get_all_partition_ids
 from numpy import random
-from visualization import board_add_image
+from visualization import board_add_images
 import BraTS
 
 from . import utils
+
 
 class UNet3DTrainer:
     """3D UNet trainer.
@@ -47,13 +49,13 @@ class UNet3DTrainer:
                  max_num_epochs=100, max_num_iterations=1e5,
                  validate_after_iters=100, log_after_iters=100,
                  validate_iters=None, num_iterations=1, num_epoch=0,
-                 eval_score_higher_is_better=True,best_eval_score=None,
-                 logger=None, optimizer_mode=None):
+                 eval_score_higher_is_better=True, best_eval_score=None,
+                 logger=None):
         if logger is None:
-            self.logger = utils.get_logger('UNet3DTrainer', level=logging.DEBUG)
+            self.logger = utils.get_logger('VaeUnetTrainer', level=logging.DEBUG)
         else:
             self.logger = logger
-
+        self.config = load_config()
         self.logger.info(model)
         self.model = model
         self.optimizer = optimizer
@@ -70,8 +72,7 @@ class UNet3DTrainer:
         self.log_after_iters = log_after_iters
         self.validate_iters = validate_iters
         self.eval_score_higher_is_better = eval_score_higher_is_better
-        self.optimizer_mode = optimizer_mode
-        logger.info(f'eval_score_higher_is_better: {eval_score_higher_is_better}')
+        self.logger.info(f'eval_score_higher_is_better: {eval_score_higher_is_better}')
 
         if best_eval_score is not None:
             self.best_eval_score = best_eval_score
@@ -112,7 +113,7 @@ class UNet3DTrainer:
                    validate_after_iters=state['validate_after_iters'],
                    log_after_iters=state['log_after_iters'],
                    validate_iters=state['validate_iters'],
-                   model_name="UNet_Nested",
+                   model_name="VaeUNet",
                    logger=logger)
 
     @classmethod
@@ -147,10 +148,8 @@ class UNet3DTrainer:
 
             if should_terminate:
                 break
-
-            if self.optimizer_mode == 'SWA':
+            if self.config['optimizer']['mode'] == 'SWA':
                 self.optimizer.swap_swa_sgd()
-
             self.num_epoch += 1
 
     def draw_picture(self, sample):
@@ -161,9 +160,6 @@ class UNet3DTrainer:
         feature_image.set_title('output')
         plt.savefig('picture/{}.png'.format(random.randint(1, 1000)))
         plt.close()
-
-
-
 
     def train(self, train_loader, is_choose_randomly=True, is_mixup=True):
         """Trains the model for 1 epoch.
@@ -215,7 +211,9 @@ class UNet3DTrainer:
             for train_id in train_ids:
                 train_id_list.append(train_id)
 
-            brats = BraTS.DataSet(brats_root='/home/liujing/data/MICCAI_BraTS', year=2019)
+            loaders_config = self.config['loaders']
+            data_paths = loaders_config['dataset_path']
+            brats = BraTS.DataSet(brats_root=data_paths[0], year=2019)
             index = np.random.permutation(len(train_id_list))
 
             for i in range(0, len(train_id_list)):
@@ -234,7 +232,8 @@ class UNet3DTrainer:
                     target = lam * labels1 + (1 - lam) * labels2
                     # print("eq sum target", target.eq(labels1.data).cpu().sum())
                     self.logger.info(
-                        f'Using mixup. Training iteration {self.num_iterations}. Batch {i}. Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
+                        f'Using mixup. Training iteration {self.num_iterations}. '
+                        f'Batch {i}. Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
                 else:
                     idx = random.randint(0, len(train_id_list))
                     patient = brats.train.patient(train_id_list[idx])
@@ -242,7 +241,8 @@ class UNet3DTrainer:
                     labels = patient.seg
                     input = _preprocessing_images(images)
                     target = _preprocessing_labels(labels)
-                    self.logger.info(f'Patient ID {train_id_list[idx]}. Training iteration {self.num_iterations}. Batch {i}. Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
+                    self.logger.info(f'Patient ID {train_id_list[idx]}. Training iteration {self.num_iterations}. '
+                                     f'Batch {i}. Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
 
                 output, loss = self._forward_pass(input, target)
 
@@ -271,7 +271,8 @@ class UNet3DTrainer:
                         output = self.model.final_activation(output)
 
                     # visualize the feature map to tensorboard
-                    board_add_image(self.writer, 'feature map', output[0:1, 1:4, :, :, 64], self.num_iterations)
+                    board_list = [input[0:1, 1:4, :, :, 64], output[0:1, 1:4, :, :, 64], target[0:1, 1:4, :, :, 64]]
+                    board_add_images(self.writer, 'feature map', board_list, self.num_iterations)
 
                     # compute eval criterion
                     eval_score = self.eval_criterion(output, target)
@@ -287,7 +288,8 @@ class UNet3DTrainer:
                     self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.avg1,
                                           train_eval_scores_multi.avg2, train_eval_scores_multi.avg3)
                     self._log_params()
-                    self._log_images(input, target, output)
+
+                    # self._log_images(input, target, output)
 
                 if self.max_num_iterations < self.num_iterations:
                     self.logger.info(
@@ -340,6 +342,10 @@ class UNet3DTrainer:
                     if hasattr(self.model, 'final_activation'):
                         output = self.model.final_activation(output)
 
+                    # visualize the feature map to tensorboard
+                    board_list = [input[0:1, 1:4, :, :, 64], output[0:1, 1:4, :, :, 64], target[0:1, 1:4, :, :, 64]]
+                    board_add_images(self.writer, 'feature map', board_list, self.num_iterations)
+
                     # compute eval criterion
                     eval_score = self.eval_criterion(output, target)
                     # train_eval_scores.update(eval_score.item(), self._batch_size(input))
@@ -354,7 +360,8 @@ class UNet3DTrainer:
                     self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.avg1,
                                           train_eval_scores_multi.avg2, train_eval_scores_multi.avg3)
                     self._log_params()
-                    self._log_images(input, target, output)
+
+                    # self._log_images(input, target, output)
 
                 if self.max_num_iterations < self.num_iterations:
                     self.logger.info(
@@ -362,12 +369,6 @@ class UNet3DTrainer:
                     return True
 
                 self.num_iterations += 1
-
-        # adjust learning rate if necessary
-        if isinstance(self.scheduler, ReduceLROnPlateau):
-            self.scheduler.step(eval_score)
-        else:
-            self.scheduler.step()
 
         return False
 
@@ -411,8 +412,6 @@ class UNet3DTrainer:
         finally:
             # set back in training mode
             self.model.train()
-
-
 
     def _split_training_batch(self, t):
         def _move_to_device(input):
@@ -529,16 +528,16 @@ class UNet3DTrainer:
         tagged_images = []
 
         if batch.ndim == 5:
-            # NCDHW
-            slice_idx = batch.shape[2] // 2  # get the middle slice
+            # NCHWD
+            slice_idx = batch.shape[4] // 2  # get the middle slice
             for batch_idx in range(batch.shape[0]):
                 for channel_idx in range(batch.shape[1]):
                     tag = tag_template.format(name, batch_idx, channel_idx, slice_idx)
                     img = batch[batch_idx, channel_idx, slice_idx, ...]
                     tagged_images.append((tag, self._normalize_img(img)))
         else:
-            # batch has no channel dim: NDHW
-            slice_idx = batch.shape[1] // 2  # get the middle slice
+            # batch has no channel dim: NHWD
+            slice_idx = batch.shape[3] // 2  # get the middle slice
             for batch_idx in range(batch.shape[0]):
                 tag = tag_template.format(name, batch_idx, 0, slice_idx)
                 img = batch[batch_idx, slice_idx, ...]
