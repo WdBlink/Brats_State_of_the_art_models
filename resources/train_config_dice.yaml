@@ -19,7 +19,11 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
+<<<<<<< HEAD
   checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/Unet_baseline/
+=======
+  checkpoint_dir: /home/liujing/bright-light-515_state_of_the_art_models/checkpoints/
+>>>>>>> 3abb3d068a36e7375a2cc42f51914b294b9e04cd
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # how many iterations between validations
@@ -78,7 +82,7 @@ loaders:
   val_path:
     - 'resources/random_label3D.h5'
   dataset_path:
-    - '/home/server/data'
+    - '/home/liujing/data/MICCAI_BraTS'
   # how many subprocesses to use for data loading
   num_workers: 2
   # data transformations/augmentations
