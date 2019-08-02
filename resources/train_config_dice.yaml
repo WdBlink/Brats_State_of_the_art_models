@@ -3,7 +3,7 @@ manual_seed: 0
 # model configuration
 model:
   # model class
-  name: UNet3D
+  name: NoNewNet
   # number of input channels to the model
   in_channels: 4
   # number of output channels
@@ -19,11 +19,7 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-<<<<<<< HEAD
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/Unet_baseline/
-=======
-  checkpoint_dir: /home/liujing/bright-light-515_state_of_the_art_models/checkpoints/
->>>>>>> 3abb3d068a36e7375a2cc42f51914b294b9e04cd
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # how many iterations between validations
@@ -43,18 +39,18 @@ optimizer:
   # initial learning rate
   learning_rate: 0.0001
   # weight decay
-  weight_decay: 0.003
+  weight_decay: 0.002
 # loss function configuration
 loss:
   # loss function to be used during training
-  name: DiceLoss_SurfaceLoss
+  name: BratsDiceLoss
   # A manual rescaling weight given to each class.
   loss_weight: null
   # a target value that is ignored and does not contribute to the input gradient
   ignore_index: null
 # evaluation metric configuration
 eval_metric:
-  name: DiceCoefficient
+  name: Dice
   # a target label that is ignored during metric evaluation
   ignore_index: null
 lr_scheduler:
@@ -63,6 +59,8 @@ lr_scheduler:
   gamma: 0.99
 # data loaders configuration
 loaders:
+  # if use Mix Up
+  mixup: True
   # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
   train_patch: [32, 64, 64]
   # train stride between patches
@@ -82,9 +80,9 @@ loaders:
   val_path:
     - 'resources/random_label3D.h5'
   dataset_path:
-    - '/home/liujing/data/MICCAI_BraTS'
+    - '/home/server/data'
   # how many subprocesses to use for data loading
-  num_workers: 2
+  num_workers: 0
   # data transformations/augmentations
   transformer:
     train:

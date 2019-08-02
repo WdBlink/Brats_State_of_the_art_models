@@ -6,7 +6,6 @@ Github: https://github.com/VDeamoV
 Description:
     fork from https://github.com/hubutui/DiceLoss-PyTorch.git
     add ohem funciton
-
     1. define each classes' weight
     2. use ohem or every class
 """

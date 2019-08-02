@@ -23,25 +23,177 @@ def compute_per_channel_dice(input, target, epsilon=1e-5, ignore_index=None, wei
 
     seg_pred = torch.reshape(input[0], [4, -1])
     seg_true = torch.reshape(target[0], [4, -1])
-<<<<<<< HEAD
     # seg_pred = seg_pred.to(dtype=torch.float64)
     # seg_true = seg_true.to(dtype=torch.float64)
-=======
-    seg_pred = seg_pred.to(dtype=torch.float64)
-    seg_true = seg_true.to(dtype=torch.float64)
->>>>>>> 3abb3d068a36e7375a2cc42f51914b294b9e04cd
 
     seg_true = seg_true[:, 1:].to(dtype=torch.float32)
     seg_pred = seg_pred[:, 1:].to(dtype=torch.float32)
     # target = target.float()
     # Compute per channel Dice Coefficient
-
     intersect = (seg_pred * seg_true).sum(-1)
     if weight is not None:
         intersect = weight * intersect
 
     denominator = (seg_pred + seg_true).sum(-1)
     return 2. * intersect / denominator.clamp(min=epsilon)
+
+
+class BratsDiceLoss(nn.Module):
+    """Dice loss of Brats dataset
+    Args:
+        outputs: A tensor of shape [N, *]
+        labels: A tensor of shape same with predict
+    Returns:
+        Loss tensor according to arg reduction
+    Raise:
+        Exception if unexpected reduction
+    """
+    def __init__(self, nonSquared=False, epsilon=1e-5, weight=None, ignore_index=None, sigmoid_normalization=True,
+                 skip_last_target=False):
+        super(BratsDiceLoss, self).__init__()
+        self.nonSquared = nonSquared
+
+    def forward(self, outputs, labels):
+        # bring outputs into correct shape
+        wt, tc, et = outputs.chunk(3, dim=1)
+        s = wt.shape
+        wt = wt.view(s[0], s[2], s[3], s[4])
+        tc = tc.view(s[0], s[2], s[3], s[4])
+        et = et.view(s[0], s[2], s[3], s[4])
+
+        # bring masks into correct shape
+        wtMask, tcMask, etMask = labels.chunk(3, dim=1)
+        s = wtMask.shape
+        wtMask = wtMask.view(s[0], s[2], s[3], s[4])
+        tcMask = tcMask.view(s[0], s[2], s[3], s[4])
+        etMask = etMask.view(s[0], s[2], s[3], s[4])
+
+        # calculate losses
+        wtLoss = self.diceLoss(wt, wtMask, nonSquared=self.nonSquared)
+        tcLoss = self.diceLoss(tc, tcMask, nonSquared=self.nonSquared)
+        etLoss = self.diceLoss(et, etMask, nonSquared=self.nonSquared)
+
+        return (wtLoss + tcLoss + etLoss) / 5
+
+    def diceLoss(self, pred, target, nonSquared=False):
+        return 1 - self.softDice(pred, target, nonSquared=nonSquared)
+
+    def softDice(self, pred, target, smoothing=1, nonSquared=False):
+        intersection = (pred * target).sum(dim=(1, 2, 3))
+        if nonSquared:
+            union = (pred).sum() + (target).sum()
+        else:
+            union = (pred * pred).sum(dim=(1, 2, 3)) + (target * target).sum(dim=(1, 2, 3))
+        dice = (2 * intersection + smoothing) / (union + smoothing)
+
+        # fix nans
+        dice[dice != dice] = dice.new_tensor([1.0])
+
+        return dice.mean()
+
+
+def bratsDiceLoss(outputs, labels, nonSquared=False):
+    """Dice loss of Brats dataset
+    Args:
+        outputs: A tensor of shape [N, *]
+        labels: A tensor of shape same with predict
+    Returns:
+        Loss tensor according to arg reduction
+    Raise:
+        Exception if unexpected reduction
+    """
+    def diceLoss(pred, target, nonSquared=False):
+        return 1 - softDice(pred, target, nonSquared=nonSquared)
+
+    def softDice(pred, target, smoothing=1, nonSquared=False):
+        intersection = (pred * target).sum(dim=(1, 2, 3))
+        if nonSquared:
+            union = (pred).sum() + (target).sum()
+        else:
+            union = (pred * pred).sum(dim=(1, 2, 3)) + (target * target).sum(dim=(1, 2, 3))
+        dice = (2 * intersection + smoothing) / (union + smoothing)
+
+        # fix nans
+        dice[dice != dice] = dice.new_tensor([1.0])
+
+        return dice.mean()
+
+    # bring outputs into correct shape
+    wt, tc, et = outputs.chunk(3, dim=1)
+    s = wt.shape
+    wt = wt.view(s[0], s[2], s[3], s[4])
+    tc = tc.view(s[0], s[2], s[3], s[4])
+    et = et.view(s[0], s[2], s[3], s[4])
+
+    # bring masks into correct shape
+    wtMask, tcMask, etMask = labels.chunk(3, dim=1)
+    s = wtMask.shape
+    wtMask = wtMask.view(s[0], s[2], s[3], s[4])
+    tcMask = tcMask.view(s[0], s[2], s[3], s[4])
+    etMask = etMask.view(s[0], s[2], s[3], s[4])
+
+    #calculate losses
+    wtLoss = diceLoss(wt, wtMask, nonSquared=nonSquared)
+    tcLoss = diceLoss(tc, tcMask, nonSquared=nonSquared)
+    etLoss = diceLoss(et, etMask, nonSquared=nonSquared)
+
+    return (wtLoss + tcLoss + etLoss) / 5
+
+
+class BinaryDiceLoss(nn.Module):
+    """Dice loss of binary class
+    Args:
+        smooth: A float number to smooth loss, and avoid NaN error, default: 1
+        p: Denominator value: \sum{x^p} + \sum{y^p}, default: 2
+        predict: A tensor of shape [N, *]
+        target: A tensor of shape same with predict
+        reduction: Reduction method to apply, return mean over batch if 'mean',
+            return sum if 'sum', return a tensor of shape [N,] if 'none'
+    Returns:
+        Loss tensor according to arg reduction
+    Raise:
+        Exception if unexpected reduction
+    """
+    def __init__(self, smooth=1, p=2, reduction='mean', ohem_ratio=None):
+        super(BinaryDiceLoss, self).__init__()
+        self.smooth = smooth
+        self.p = p
+        self.reduction = reduction
+        self.ohem_ratio = ohem_ratio
+
+    def forward(self, predict, target):
+        assert predict.shape[0] == target.shape[0], "predict & target batch size don't match"
+        predict = predict.contiguous().view(predict.shape[0], -1)
+        target = target.contiguous().view(target.shape[0], -1)
+
+
+        # add ohem here
+        if self.ohem_ratio:
+            num = torch.mul(predict, target)
+            den = predict.pow(self.p) + target.pow(self.p)
+            with torch.no_grad():
+                num_values, _ = torch.topk(num.reshape(-1),
+                                           int(num.nelement()*self.ohem_ratio))
+                den_values, _ = torch.topk(den.reshape(-1),
+                                           int(den.nelement()*self.ohem_ratio))
+                num_mask = num >= num_values[-1]
+                den_mask = den >= den_values[-1]
+            num = torch.sum(num * num_mask.type(dtype=torch.float), dim=1) + self.smooth
+            den = torch.sum(den * den_mask.type(dtype=torch.float), dim=1) + self.smooth
+        else:
+            num = torch.sum(torch.mul(predict, target), dim=1) + self.smooth
+            den = torch.sum(predict.pow(self.p) + target.pow(self.p), dim=1) + self.smooth
+
+        loss = 1 - num / den
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        elif self.reduction == 'none':
+            return loss
+        else:
+            raise Exception('Unexpected reduction {}'.format(self.reduction))
 
 
 class DiceLoss(nn.Module):
@@ -549,6 +701,10 @@ def get_loss_criterion(config):
         return OhemDiceLoss()
     elif name == 'DiceLoss_SurfaceLoss':
         return DiceLoss_SurfaceLoss()
+    elif name == 'BinaryDiceLoss':
+        return BinaryDiceLoss()
+    elif name == 'BratsDiceLoss':
+        return BratsDiceLoss()
     else:
         raise RuntimeError(f"Unsupported loss function: '{name}'. Supported losses: {SUPPORTED_LOSSES}")
 

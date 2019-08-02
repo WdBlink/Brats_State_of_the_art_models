@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 import random
 
 from unet3d.buildingblocks import conv3d, Encoder, Decoder, FinalConv, DoubleConv, \
-    ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock, unetUp, unetConv3
+    ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock, unetUp, unetConv3, \
+    EncoderModule, DecoderModule
 from unet3d.utils import create_feature_maps
 
 
@@ -770,3 +771,45 @@ class UNet_Nested(nn.Module):
             return self.sigmoid(final)
         else:
             return final_4
+
+
+class NoNewNet(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(NoNewNet, self).__init__()
+        channels = 30
+        self.levels = 5
+
+        self.lastConv = nn.Conv3d(channels, 3, 1, bias=True)
+
+        #create encoder levels
+        encoderModules = []
+        encoderModules.append(EncoderModule(4, channels, False, True))
+        for i in range(self.levels - 2):
+            encoderModules.append(EncoderModule(channels * pow(2, i), channels * pow(2, i+1), True, True))
+        encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), True, False))
+        self.encoders = nn.ModuleList(encoderModules)
+
+        #create decoder levels
+        decoderModules = []
+        decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, False))
+        for i in range(self.levels - 2):
+            decoderModules.append(DecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
+        decoderModules.append(DecoderModule(channels, channels, False, True))
+        self.decoders = nn.ModuleList(decoderModules)
+
+    def forward(self, x):
+        inputStack = []
+        for i in range(self.levels):
+            x = self.encoders[i](x)
+            if i < self.levels - 1:
+                inputStack.append(x)
+
+        for i in range(self.levels):
+            x = self.decoders[i](x)
+            if i < self.levels - 1:
+                x = x + inputStack.pop()
+
+        x = self.lastConv(x)
+        x = torch.sigmoid(x)
+        return x

@@ -161,7 +161,7 @@ class UNet3DTrainer:
         plt.savefig('picture/{}.png'.format(random.randint(1, 1000)))
         plt.close()
 
-    def train(self, train_loader, is_choose_randomly=True, is_mixup=True):
+    def train(self, train_loader, is_choose_randomly=False, is_mixup=False):
         """Trains the model for 1 epoch.
 
         Args:
@@ -343,7 +343,7 @@ class UNet3DTrainer:
                         output = self.model.final_activation(output)
 
                     # visualize the feature map to tensorboard
-                    board_list = [input[0:1, 1:4, :, :, 64], output[0:1, 1:4, :, :, 64], target[0:1, 1:4, :, :, 64]]
+                    board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
                     board_add_images(self.writer, 'feature map', board_list, self.num_iterations)
 
                     # compute eval criterion

@@ -85,7 +85,7 @@ def _create_lr_scheduler(config, optimizer):
 
 def main():
     # Create main logger
-    logger = get_logger('VaeUnetTrainer')
+    logger = get_logger('NoNewNetTrainer')
 
     # Load and log experiment configuration
     config = load_config()
