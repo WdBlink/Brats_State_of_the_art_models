@@ -23,13 +23,8 @@ def compute_per_channel_dice(input, target, epsilon=1e-5, ignore_index=None, wei
 
     seg_pred = torch.reshape(input[0], [4, -1])
     seg_true = torch.reshape(target[0], [4, -1])
-<<<<<<< HEAD
-    # seg_pred = seg_pred.to(dtype=torch.float64)
-    # seg_true = seg_true.to(dtype=torch.float64)
-=======
     seg_pred = seg_pred.to(dtype=torch.float64)
     seg_true = seg_true.to(dtype=torch.float64)
->>>>>>> 3abb3d068a36e7375a2cc42f51914b294b9e04cd
 
     seg_true = seg_true[:, 1:].to(dtype=torch.float32)
     seg_pred = seg_pred[:, 1:].to(dtype=torch.float32)
