@@ -520,10 +520,10 @@ class VaeBlock(nn.Module):
     def __init__(self, input_channels, output_channels, order="cbr", num_groups=8):
         super(VaeBlock, self).__init__()
         self.conv_block = SingleConv(input_channels, 1, order=order, num_groups=num_groups)
-        self.fcn = nn.Linear(7680, 128)
+        self.fcn = nn.Linear(9600, 128)
         self.fcn1 = nn.Linear(128, 64)
         self.fcn2 = nn.Linear(128, 64)
-        self.fcn3 = nn.Linear(128, 7680)
+        self.fcn3 = nn.Linear(128, 9600)
         self.conv1 = conv3d(1, 128, kernel_size=1, bias=True, padding=0)
         # self.greenblock = GreenBlock(128, 128)
         self.conv2 = conv3d(128, 64, kernel_size=1, bias=True, padding=0)
@@ -542,7 +542,7 @@ class VaeBlock(nn.Module):
         x = torch.reshape(x, (-1, 128))
 
         x = self.fcn3(x)
-        x = torch.reshape(x, (-1, 1, 20, 24, 16))
+        x = torch.reshape(x, (-1, 1, 20, 24, 20))
         x = self.conv1(x)
         x = F.upsample(x, size=[2*x.size(2), 2*x.size(3), 2*x.size(4)], mode='trilinear')
         # x = self.greenblock(x)
@@ -572,3 +572,50 @@ class VaeBlock(nn.Module):
         dim = z_mean.size(0)
         epsilon = torch.randn([batch, dim]).to(config['device'])
         return z_mean + torch.exp(0.5 * z_var) * epsilon
+
+
+class EncoderModule(nn.Module):
+    def __init__(self, inChannels, outChannels, maxpool=False, secondConv=True, hasDropout=False):
+        super(EncoderModule, self).__init__()
+        groups = min(outChannels, 30)
+        self.maxpool = maxpool
+        self.secondConv = secondConv
+        self.hasDropout = hasDropout
+        self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
+        self.gn1 = nn.GroupNorm(groups, outChannels)
+        if secondConv:
+            self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
+            self.gn2 = nn.GroupNorm(groups, outChannels)
+        if hasDropout:
+            self.dropout = nn.Dropout3d(0.2, True)
+
+    def forward(self, x):
+        if self.maxpool:
+            x = F.max_pool3d(x, 2)
+        doInplace = True and not self.hasDropout
+        x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=doInplace)
+        if self.hasDropout:
+            x = self.dropout(x)
+        if self.secondConv:
+            x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=True)
+        return x
+
+class DecoderModule(nn.Module):
+    def __init__(self, inChannels, outChannels, upsample=False, firstConv=True):
+        super(DecoderModule, self).__init__()
+        groups = min(outChannels, 30)
+        self.upsample = upsample
+        self.firstConv = firstConv
+        if firstConv:
+            self.conv1 = nn.Conv3d(inChannels, inChannels, 3, padding=1, bias=False)
+            self.gn1 = nn.GroupNorm(groups, inChannels)
+        self.conv2 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
+        self.gn2 = nn.GroupNorm(groups, outChannels)
+
+    def forward(self, x):
+        if self.firstConv:
+            x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=True)
+        x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=True)
+        if self.upsample:
+            x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
+        return x

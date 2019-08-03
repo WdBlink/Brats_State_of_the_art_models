@@ -161,7 +161,7 @@ class UNet3DTrainer:
         plt.savefig('picture/{}.png'.format(random.randint(1, 1000)))
         plt.close()
 
-    def train(self, train_loader, is_choose_randomly=True, is_mixup=True):
+    def train(self, train_loader, is_choose_randomly=False, is_mixup=False):
         """Trains the model for 1 epoch.
 
         Args:
@@ -304,9 +304,9 @@ class UNet3DTrainer:
                 self.logger.info(
                     f'Training iteration {self.num_iterations}. Batch {i}. Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
 
-                input, target, weight = self._split_training_batch(t)
+                input, pid, target = self._split_training_batch(t)
 
-                output, loss = self._forward_pass(input, target, weight)
+                output, loss = self._forward_pass(input, target, weight=None)
 
                 # output_sample = output[0, 1, :, :, 80].cpu().detach().numpy()
                 # self.draw_picture(output_sample)
@@ -343,7 +343,7 @@ class UNet3DTrainer:
                         output = self.model.final_activation(output)
 
                     # visualize the feature map to tensorboard
-                    board_list = [input[0:1, 1:4, :, :, 64], output[0:1, 1:4, :, :, 64], target[0:1, 1:4, :, :, 64]]
+                    board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
                     board_add_images(self.writer, 'feature map', board_list, self.num_iterations)
 
                     # compute eval criterion
@@ -386,9 +386,9 @@ class UNet3DTrainer:
                 for i, t in enumerate(val_loader):
                     self.logger.info(f'Validation iteration {i}')
 
-                    input, target, weight = self._split_training_batch(t)
+                    input, pid, target = self._split_training_batch(t)
 
-                    output, loss = self._forward_pass(input, target, weight)
+                    output, loss = self._forward_pass(input, target, weight=None)
                     val_losses.update(loss.item(), self._batch_size(input))
 
                     eval_score = self.eval_criterion(output, target)
@@ -416,17 +416,17 @@ class UNet3DTrainer:
     def _split_training_batch(self, t):
         def _move_to_device(input):
             if isinstance(input, tuple) or isinstance(input, list):
-                return tuple([_move_to_device(x) for x in input])
+
+                return tuple([_move_to_device(input[0]), input[1], _move_to_device(input[2])])
             else:
                 return input.to(self.device, dtype=torch.float)
 
         t = _move_to_device(t)
-        weight = None
         if len(t) == 2:
             input, target = t
         else:
-            input, target, weight = t
-        return input, target, weight
+            input, pid, target = t
+        return input, pid, target
 
     def _forward_pass(self, input, target, weight=None):
         # forward pass

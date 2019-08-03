@@ -13,6 +13,62 @@ LOGGER = get_logger('EvalMetric')
 SUPPORTED_METRICS = ['dice', 'iou', 'boundary_ap', 'dt_ap', 'quantized_dt_ap', 'angle', 'inverse_angular']
 
 
+def dice(pred, target):
+    predBin = (pred > 0.5).float()
+    return softDice(predBin, target, 0, True).item()
+
+
+def softDice(pred, target, smoothing=1, nonSquared=False):
+    intersection = (pred * target).sum(dim=(1, 2, 3))
+    if nonSquared:
+        union = (pred).sum() + (target).sum()
+    else:
+        union = (pred * pred).sum(dim=(1, 2, 3)) + (target * target).sum(dim=(1, 2, 3))
+    dice = (2 * intersection + smoothing) / (union + smoothing)
+
+    #fix nans
+    dice[dice != dice] = dice.new_tensor([1.0])
+
+    return dice.mean()
+
+
+class Dice:
+    """Computes Dice Coefficient.
+        Generalized to multiple channels by computing per-channel Dice Score
+        (as described in https://arxiv.org/pdf/1707.03237.pdf) and theTn simply taking the average.
+        Input is expected to be probabilities instead of logits.
+        This metric is mostly useful when channels contain the same semantic class (e.g. affinities computed with different offsets).
+        DO NOT USE this metric when training with DiceLoss, otherwise the results will be biased towards the loss.
+        """
+
+    def __init__(self, epsilon=1e-5, ignore_index=None, **kwargs):
+        self.epsilon = epsilon
+        self.ignore_index = ignore_index
+
+    def __call__(self, outputs, labels):
+        """
+        :param input: 5D probability maps torch tensor (NxCxDxHxW)
+        :param target: 4D or 5D ground truth torch tensor. 4D (NxDxHxW) tensor will be expanded to 5D as one-hot
+        :return: Soft Dice Coefficient averaged over all channels/classes
+        """
+        wt, tc, et = outputs.chunk(3, dim=1)
+        s = wt.shape
+        wt = wt.view(s[0], s[2], s[3], s[4])
+        tc = tc.view(s[0], s[2], s[3], s[4])
+        et = et.view(s[0], s[2], s[3], s[4])
+
+        wtMask, tcMask, etMask = labels.chunk(3, dim=1)
+        s = wtMask.shape
+        wtMask = wtMask.view(s[0], s[2], s[3], s[4])
+        tcMask = tcMask.view(s[0], s[2], s[3], s[4])
+        etMask = etMask.view(s[0], s[2], s[3], s[4])
+
+        dice_wt = dice(wt, wtMask)
+        dice_tc = dice(tc, tcMask)
+        dice_et = dice(et, etMask)
+        return dice_wt, dice_tc, dice_et
+
+
 class DiceCoefficient:
     """Computes Dice Coefficient.
     Generalized to multiple channels by computing per-channel Dice Score

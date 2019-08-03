@@ -5,6 +5,7 @@ import h5py
 import numpy as np
 import torch
 import torchvision
+import random
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
 
 import augment.transforms as transforms
@@ -12,6 +13,7 @@ import BraTS
 from unet3d.utils import get_logger
 from preprocess.partitions import load_tfrecord_datasets, get_all_partition_ids
 from unet3d.losses import expand_as_one_hot
+import preprocess.augmentation as aug
 
 
 class SliceBuilder:
@@ -115,7 +117,7 @@ class BraTSDataset(Dataset):
     """
     Implementation of torch.utils.data.Dataset backed by the BRATS files, which iterates over the raw and label
     """
-    def __init__(self, loader, patient_ids, transformer_config, phase):
+    def __init__(self, loader, patient_ids, transformer_config, phase, is_mixup):
 
         self.transformer = transforms.get_transformer(transformer_config, mean=0.5, std=0.5, phase=phase)
 
@@ -132,27 +134,60 @@ class BraTSDataset(Dataset):
         self.loader = loader
         self.train_datasets = self.build_dataset_list(patient_ids)
         self.count = len(self.train_datasets)
+        self.is_mixup = is_mixup
 
     def __getitem__(self, index):
         if index >= len(self):
             raise StopIteration
-        patient = self.loader.patient(self.train_datasets[index])
-        images = self.make_crop(patient.mri)
-        mri_transformed = self.mri_transform(images, self.raw_transform)
+        if self.is_mixup:
+            idx = random.randint(0, len(self.train_datasets)-1)
+            patient1 = self.loader.patient(self.train_datasets[index])
+            patient2 = self.loader.patient(self.train_datasets[idx])
+            images1 = self.mri_preprocessing(patient1.mri)
+            images2 = self.mri_preprocessing(patient2.mri)
 
-        # transforms the mri to range of -1~1
-        image_max = mri_transformed.max()
-        self.transforms = transforms.Compose(
-            [
-             transforms.RangeNormalize(max_value=image_max),
-             transforms.Normalize(std=0.5, mean=0.5)])
-        images = self.transforms(mri_transformed)
+            labels1 = self.seg_preprocessing(patient1.seg)
+            labels2 = self.seg_preprocessing(patient2.seg)
+            alpha = 1.0  # 超参数
+            lam = np.random.beta(alpha, alpha)
+            images = lam * images1 + (1 - lam) * images2
+            label_transformed = lam * labels1 + (1 - lam) * labels2
+            # print("eq sum target", target.eq(labels1.data).cpu().sum())
+            print(f'Using mixup Patient id is:{self.train_datasets[index], self.train_datasets[idx]}')
+        else:
+            patient = self.loader.patient(self.train_datasets[index])
+            images = self.make_crop(patient.mri)
+            mri_transformed = self.mri_transform(images, self.raw_transform)
 
-        # print(self.train_datasets[index])
-        labels = self.make_crop(patient.seg)
-        labels = self.make_one_hot(labels)
-        label_transformed = self.mri_transform(labels, self.label_transform)
+            # transforms the mri to range of -1~1
+            image_max = mri_transformed.max()
+            self.transforms = transforms.Compose(
+                [
+                 transforms.RangeNormalize(max_value=image_max),
+                 transforms.Normalize(std=0.5, mean=0.5)])
+            images = self.transforms(mri_transformed)
+
+            # print(self.train_datasets[index])
+            label_transformed = self.seg_preprocessing(patient.seg)
+            # label_transformed = self.mri_transform(labels, self.label_transform)
         return images, label_transformed
+
+    def mri_preprocessing(self, data):
+        _image = self.make_crop(data)
+        _image_max = np.max(_image)
+        transform = transforms.Compose(
+            [transforms.ToTensor(expand_dims=True),
+             transforms.RangeNormalize(max_value=_image_max),
+             transforms.Normalize(std=0.5, mean=0.5)])
+        images = transform(_image).unsqueeze(0)
+        return images[0, ...]
+
+    def seg_preprocessing(self, seg):
+        _label = self.make_crop(seg)
+        _label = self._toEvaluationOneHot(_label)
+        _label = np.transpose(_label, (3, 0, 1, 2))
+        _label = torch.from_numpy(_label).unsqueeze(0)
+        return _label[0, ...]
 
     @staticmethod
     def mri_transform(data, transformer):
@@ -191,8 +226,18 @@ class BraTSDataset(Dataset):
         return seg
 
     @staticmethod
+    def _toEvaluationOneHot(labels):
+        shape = labels.shape
+        out = np.zeros([shape[0], shape[1], shape[2], 3], dtype=np.float32)
+        out[:, :, :, 0] = (labels != 0)
+        out[:, :, :, 1] = (labels != 0) * (labels != 2)
+        out[:, :, :, 2] = (labels == 4)
+        return out
+
+    @staticmethod
     def make_crop(input):
-        image = input[..., 40:200, 24:216, 13:141]
+        image = input[..., 40:200, 40:200, 13:141]
+        # image = input[..., 72:200, 72:200, 13:141]
         return image
 
     @staticmethod
@@ -204,6 +249,147 @@ class BraTSDataset(Dataset):
         :return: a tuple of (mean, std) of the raw data
         """
         return input.mean(keepdims=True), input.std(keepdims=True)
+
+
+class BratsDataset(torch.utils.data.Dataset):
+    #mode must be trian, test or val
+    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False):
+        super(BratsDataset, self).__init__()
+        self.filePath = filePath
+        self.mode = mode
+        self.file = None
+        # self.trainOriginalClasses = expConfig.TRAIN_ORIGINAL_CLASSES
+        self.randomCrop = randomCrop
+        self.hasMasks = hasMasks
+        self.returnOffsets = returnOffsets
+
+        #augmentation settings
+        self.nnAugmentation = True
+        self.softAugmentation = False
+        self.doRotate = True
+        self.rotDegrees = 20
+        self.doScale = True
+        self.scaleFactor = 1.1
+        self.doFlip = True
+        self.doElasticAug = True
+        self.sigma = 10
+        self.doIntensityShift = True
+        self.maxIntensityShift = 0.1
+
+    def __getitem__(self, index):
+
+        #lazily open file
+        self.openFileIfNotOpen()
+
+        #load from hdf5 file
+        image = self.file["images_" + self.mode][index, ...]
+        if self.hasMasks: labels = self.file["masks_" + self.mode][index, ...]
+
+        # Prepare data depeinding on soft/hard augmentation scheme
+        if not self.nnAugmentation:
+            if not self.trainOriginalClasses and (self.mode != "train" or self.softAugmentation):
+                if self.hasMasks: labels = self._toEvaluationOneHot(labels)
+                defaultLabelValues = np.zeros(3, dtype=np.float32)
+            else:
+                if self.hasMasks: labels = self._toOrignalCategoryOneHot(labels)
+                defaultLabelValues = np.asarray([1, 0, 0, 0, 0], dtype=np.float32)
+        elif self.hasMasks:
+            if labels.ndim < 4:
+                labels = np.expand_dims(labels, 3)
+            defaultLabelValues = np.asarray([0], dtype=np.float32)
+
+        #augment data
+        if self.mode == "train":
+            image, labels = aug.augment3DImage(image,
+                                               labels,
+                                               defaultLabelValues,
+                                               self.nnAugmentation,
+                                               self.doRotate,
+                                               self.rotDegrees,
+                                               self.doScale,
+                                               self.scaleFactor,
+                                               self.doFlip,
+                                               self.doElasticAug,
+                                               self.sigma,
+                                               self.doIntensityShift,
+                                               self.maxIntensityShift)
+
+        if self.nnAugmentation:
+            if self.hasMasks: labels = self._toEvaluationOneHot(np.squeeze(labels, 3))
+        else:
+            if self.mode == "train" and not self.softAugmentation and not self.trainOriginalClasses and self.hasMasks:
+                labels = self._toOrdinal(labels)
+                labels = self._toEvaluationOneHot(labels)
+
+        # random crop
+        if not self.randomCrop is None:
+            shape = image.shape
+            x = random.randint(0, shape[0] - self.randomCrop[0])
+            y = random.randint(0, shape[1] - self.randomCrop[1])
+            z = random.randint(0, shape[2] - self.randomCrop[2])
+            image = image[x:x+self.randomCrop[0], y:y+self.randomCrop[1], z:z+self.randomCrop[2], :]
+            if self.hasMasks: labels = labels[x:x + self.randomCrop[0], y:y + self.randomCrop[1], z:z + self.randomCrop[2], :]
+
+        image = np.transpose(image, (3, 0, 1, 2))  # bring into NCWH format
+        if self.hasMasks: labels = np.transpose(labels, (3, 0, 1, 2))  # bring into NCWH format
+
+        # to tensor
+        #image = image[:, 0:32, 0:32, 0:32]
+        # image = self.make_crop(image)
+        image = torch.from_numpy(image)
+        if self.hasMasks:
+            #labels = labels[:, 0:32, 0:32, 0:32]
+            labels = torch.from_numpy(labels)
+
+        #get pid
+        pid = self.file["pids_" + self.mode][index]
+
+        if self.returnOffsets:
+            xOffset = self.file["xOffsets_" + self.mode][index]
+            yOffset = self.file["yOffsets_" + self.mode][index]
+            zOffset = self.file["zOffsets_" + self.mode][index]
+            if self.hasMasks:
+                return image, str(pid), labels, xOffset, yOffset, zOffset
+            else:
+                return image, pid, xOffset, yOffset, zOffset
+        else:
+            if self.hasMasks:
+                return image, str(pid), labels
+            else:
+                return image, pid
+
+    def __len__(self):
+        #lazily open file
+        self.openFileIfNotOpen()
+
+        return self.file["images_" + self.mode].shape[0]
+
+    def openFileIfNotOpen(self):
+        if self.file == None:
+            self.file = h5py.File(self.filePath, "r")
+
+    def _toEvaluationOneHot(self, labels):
+        shape = labels.shape
+        out = np.zeros([shape[0], shape[1], shape[2], 3], dtype=np.float32)
+        out[:, :, :, 0] = (labels != 0)
+        out[:, :, :, 1] = (labels != 0) * (labels != 2)
+        out[:, :, :, 2] = (labels == 4)
+        return out
+
+    def _toOrignalCategoryOneHot(self, labels):
+        shape = labels.shape
+        out = np.zeros([shape[0], shape[1], shape[2], 5], dtype=np.float32)
+        for i in range(5):
+            out[:, :, :, i] = (labels == i)
+        return out
+
+    def _toOrdinal(self, labels):
+        return np.argmax(labels, axis=3)
+
+    def make_crop(self, input):
+        # image = input[..., 40:200, 40:200, 13:141]
+        image = input[..., 72:200, 72:200, 13:141]
+        return image
 
 
 class HDF5Dataset(Dataset):
@@ -358,80 +544,6 @@ def _get_slice_builder_cls(class_name):
     return clazz
 
 
-def get_train_loaders(config):
-    """
-    Returns dictionary containing the training and validation loaders
-    (torch.utils.data.DataLoader) backed by the datasets.hdf5.HDF5Dataset.
-
-    :param config: a top level configuration object containing the 'loaders' key
-    :return: dict {
-        'train': <train_loader>
-        'val': <val_loader>
-    }
-    """
-    assert 'loaders' in config, 'Could not find data loaders configuration'
-    loaders_config = config['loaders']
-
-    logger = get_logger('HDF5Dataset')
-    logger.info('Creating training and validation set loaders...')
-
-    # get train and validation files
-    train_paths = loaders_config['train_path']
-    val_paths = loaders_config['val_path']
-    assert isinstance(train_paths, list)
-    assert isinstance(val_paths, list)
-    # get h5 internal paths for raw and label
-    raw_internal_path = loaders_config['raw_internal_path']
-    label_internal_path = loaders_config['label_internal_path']
-    weight_internal_path = loaders_config.get('weight_internal_path', None)
-    # get train/validation patch size and stride
-    train_patch = tuple(loaders_config['train_patch'])
-    train_stride = tuple(loaders_config['train_stride'])
-    val_patch = tuple(loaders_config['val_patch'])
-    val_stride = tuple(loaders_config['val_stride'])
-
-    # get slice_builder_cls
-    slice_builder_str = loaders_config.get('slice_builder', 'SliceBuilder')
-    logger.info(f'Slice builder class: {slice_builder_str}')
-    slice_builder_cls = _get_slice_builder_cls(slice_builder_str)
-
-    train_datasets = []
-    for train_path in train_paths:
-        try:
-            logger.info(f'Loading training set from: {train_path}...')
-            # create H5 backed training and validation dataset with data augmentation
-            train_dataset = HDF5Dataset(train_path, train_patch, train_stride, phase='train',
-                                        transformer_config=loaders_config['transformer'],
-                                        raw_internal_path=raw_internal_path,
-                                        label_internal_path=label_internal_path,
-                                        weight_internal_path=weight_internal_path,
-                                        slice_builder_cls=slice_builder_cls)
-            train_datasets.append(train_dataset)
-        except Exception:
-            logger.info(f'Skipping training set: {train_path}', exc_info=True)
-
-    val_datasets = []
-    for val_path in val_paths:
-        try:
-            logger.info(f'Loading validation set from: {val_path}...')
-            val_dataset = HDF5Dataset(val_path, val_patch, val_stride, phase='val',
-                                      transformer_config=loaders_config['transformer'],
-                                      raw_internal_path=raw_internal_path,
-                                      label_internal_path=label_internal_path,
-                                      weight_internal_path=weight_internal_path)
-            val_datasets.append(val_dataset)
-        except Exception:
-            logger.info(f'Skipping validation set: {val_path}', exc_info=True)
-
-    num_workers = loaders_config.get('num_workers', 1)
-    logger.info(f'Number of workers for train/val datasets: {num_workers}')
-    # when training with volumetric data use batch_size of 1 due to GPU memory constraints
-    return {
-        'train': DataLoader(ConcatDataset(train_datasets), batch_size=1, shuffle=True, num_workers=num_workers),
-        'val': DataLoader(ConcatDataset(val_datasets), batch_size=1, shuffle=True, num_workers=num_workers)
-    }
-
-
 def get_brats_train_loaders(config):
     """
     Returns dictionary containing the training and validation loaders
@@ -450,10 +562,9 @@ def get_brats_train_loaders(config):
     logger.info('Creating training and validation set loaders...')
 
     # get train and validation files
-    data_paths = loaders_config['dataset_path']
-    assert isinstance(data_paths, list)
+    train_path = loaders_config['train_path']
+    val_path = loaders_config['val_path']
 
-    brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train
     train_ids, test_ids, validation_ids = get_all_partition_ids()
     # loss_file_num = 0
     # for i in train_ids:
@@ -464,19 +575,25 @@ def get_brats_train_loaders(config):
     #         loss_file_num += 1
     # print(f'loss file num is {loss_file_num}')
 
-    logger.info(f'Loading training set from: {data_paths}...')
-    train_datasets = BraTSDataset(brats, train_ids, phase='train', transformer_config=loaders_config['transformer'])
+    logger.info(f'Loading training set from: {train_path}...')
+    # train_datasets = BraTSDataset(brats, train_ids, phase='train',
+    #                               transformer_config=loaders_config['transformer'],
+    #                               is_mixup=loaders_config['mixup'])
+    train_datasets = BratsDataset(train_path[0], randomCrop=[128,128,128])
 
-    logger.info(f'Loading validation set from: {data_paths}...')
-    brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train
-    val_datasets = BraTSDataset(brats, validation_ids, phase='val', transformer_config=loaders_config['transformer'])
+    logger.info(f'Loading validation set from: {val_path}...')
+    # brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train
+    # val_datasets = BraTSDataset(brats, validation_ids, phase='val',
+    #                             transformer_config=loaders_config['transformer'],
+    #                             is_mixup=False)
+    val_datasets = BratsDataset(val_path[0], randomCrop=[128, 128, 128])
 
     num_workers = loaders_config.get('num_workers', 1)
     logger.info(f'Number of workers for train/val datasets: {num_workers}')
     # when training with volumetric data use batch_size of 1 due to GPU memory constraints
     return {
-        'train': DataLoader(train_datasets, batch_size=1, shuffle=False, num_workers=num_workers),
-        'val': DataLoader(val_datasets, batch_size=1, shuffle=False, num_workers=num_workers)
+        'train': DataLoader(train_datasets, batch_size=1, shuffle=True, num_workers=num_workers),
+        'val': DataLoader(val_datasets, batch_size=1, shuffle=True, num_workers=num_workers)
     }
 #
 # import os

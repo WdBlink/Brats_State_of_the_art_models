@@ -3,6 +3,7 @@ import os
 import shutil
 import sys
 import scipy.sparse as sparse
+import cv2
 
 import numpy as np
 import torch
@@ -260,3 +261,47 @@ def adapted_rand(seg, gt, all_stats=False):
         return are, precision, recall
     else:
         return are
+
+
+def rotate_image(img, angle, interp=cv2.INTER_LINEAR):
+    rows, cols = img.shape[:2]
+    rotation_matrix = cv2.getRotationMatrix2D((cols / 2, rows / 2), angle, 1)
+    out = cv2.warpAffine(img, rotation_matrix, (cols, rows), flags=interp, borderMode=cv2.BORDER_REPLICATE)
+    return np.reshape(out, img.shape)
+
+
+def resize_image(im, size, interp=cv2.INTER_LINEAR):
+    im_resized = cv2.resize(im, (size[1], size[0]), interpolation=interp)  # swap sizes to account for weird OCV API
+    # add last dimension again if it was removed by resize
+    if im.ndim > im_resized.ndim:
+        im_resized = np.expand_dims(im_resized, im.ndim)
+    return im_resized
+
+
+def dense_image_warp(im, dx, dy, interp=cv2.INTER_LINEAR):
+
+    map_x, map_y = deformation_to_transformation(dx, dy)
+
+    do_optimization = (interp == cv2.INTER_LINEAR)
+    # The following command converts the maps to compact fixed point representation
+    # this leads to a ~20% increase in speed but could lead to accuracy losses
+    # Can be uncommented
+    if do_optimization:
+        map_x, map_y = cv2.convertMaps(map_x, map_y, dstmap1type=cv2.CV_16SC2)
+
+    remapped = cv2.remap(im, map_x, map_y, interpolation=interp, borderMode=cv2.BORDER_REFLECT) #borderValue=float(np.min(im)))
+    if im.ndim > remapped.ndim:
+        remapped = np.expand_dims(remapped, im.ndim)
+    return remapped
+
+
+def deformation_to_transformation(dx, dy):
+
+    nx, ny = dx.shape
+
+    grid_y, grid_x = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
+
+    map_x = (grid_x + dx).astype(np.float32)
+    map_y = (grid_y + dy).astype(np.float32)
+
+    return map_x, map_y
