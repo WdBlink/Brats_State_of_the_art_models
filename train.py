@@ -6,7 +6,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torchcontrib
 
 import BraTS
-from datasets.hdf5 import get_train_loaders, get_brats_train_loaders
+from datasets.hdf5 import get_brats_train_loaders
 from unet3d.config import load_config
 from unet3d.losses import get_loss_criterion
 from unet3d.metrics import get_evaluation_metric

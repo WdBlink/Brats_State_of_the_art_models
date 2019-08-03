@@ -7,7 +7,7 @@ model:
   # number of input channels to the model
   in_channels: 4
   # number of output channels
-  out_channels: 4
+  out_channels: 3
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
   layer_order: cgr
   # feature maps scale factor
@@ -19,7 +19,7 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet/
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_DataAug_boudaryloss/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # how many iterations between validations
@@ -35,7 +35,7 @@ trainer:
 # optimizer configuration
 optimizer:
   #mode
-  mode: SWA
+  mode: Adam
   # initial learning rate
   learning_rate: 0.0001
   # weight decay
@@ -43,7 +43,7 @@ optimizer:
 # loss function configuration
 loss:
   # loss function to be used during training
-  name: BratsDiceLoss
+  name: DiceLoss_SurfaceLoss
   # A manual rescaling weight given to each class.
   loss_weight: null
   # a target value that is ignored and does not contribute to the input gradient
@@ -75,14 +75,14 @@ loaders:
   label_internal_path: label
   # paths to the training datasets
   train_path:
-    - 'resources/random_label3D.h5'
+    - '/home/server/BraTS19_preprocessing/training/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
   # paths to the validation datasets
   val_path:
-    - 'resources/random_label3D.h5'
+    - '/home/server/BraTS19_preprocessing/training/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
   dataset_path:
     - '/home/server/data'
   # how many subprocesses to use for data loading
-  num_workers: 0
+  num_workers: 1
   # data transformations/augmentations
   transformer:
     train:

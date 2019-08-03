@@ -92,54 +92,6 @@ class BratsDiceLoss(nn.Module):
         return dice.mean()
 
 
-def bratsDiceLoss(outputs, labels, nonSquared=False):
-    """Dice loss of Brats dataset
-    Args:
-        outputs: A tensor of shape [N, *]
-        labels: A tensor of shape same with predict
-    Returns:
-        Loss tensor according to arg reduction
-    Raise:
-        Exception if unexpected reduction
-    """
-    def diceLoss(pred, target, nonSquared=False):
-        return 1 - softDice(pred, target, nonSquared=nonSquared)
-
-    def softDice(pred, target, smoothing=1, nonSquared=False):
-        intersection = (pred * target).sum(dim=(1, 2, 3))
-        if nonSquared:
-            union = (pred).sum() + (target).sum()
-        else:
-            union = (pred * pred).sum(dim=(1, 2, 3)) + (target * target).sum(dim=(1, 2, 3))
-        dice = (2 * intersection + smoothing) / (union + smoothing)
-
-        # fix nans
-        dice[dice != dice] = dice.new_tensor([1.0])
-
-        return dice.mean()
-
-    # bring outputs into correct shape
-    wt, tc, et = outputs.chunk(3, dim=1)
-    s = wt.shape
-    wt = wt.view(s[0], s[2], s[3], s[4])
-    tc = tc.view(s[0], s[2], s[3], s[4])
-    et = et.view(s[0], s[2], s[3], s[4])
-
-    # bring masks into correct shape
-    wtMask, tcMask, etMask = labels.chunk(3, dim=1)
-    s = wtMask.shape
-    wtMask = wtMask.view(s[0], s[2], s[3], s[4])
-    tcMask = tcMask.view(s[0], s[2], s[3], s[4])
-    etMask = etMask.view(s[0], s[2], s[3], s[4])
-
-    #calculate losses
-    wtLoss = diceLoss(wt, wtMask, nonSquared=nonSquared)
-    tcLoss = diceLoss(tc, tcMask, nonSquared=nonSquared)
-    etLoss = diceLoss(et, etMask, nonSquared=nonSquared)
-
-    return (wtLoss + tcLoss + etLoss) / 5
-
-
 class BinaryDiceLoss(nn.Module):
     """Dice loss of binary class
     Args:
@@ -249,8 +201,8 @@ class SurfaceLoss(nn.Module):
         assert simplex(probs)
         # assert not one_hot(dist_maps)
 
-        pc = probs[:, 1:, ...].type(torch.float32)
-        dc = dist_maps[:, 1:, ...].type(torch.float32)
+        pc = probs[:, :, ...].type(torch.float32)
+        dc = dist_maps[:, :, ...].type(torch.float32)
 
         multipled = einsum("bcwhd,bcwhd->bcwhd", pc, dc)
 
@@ -264,6 +216,7 @@ class DiceLoss_SurfaceLoss(nn.Module):
                  skip_last_target=False):
         super(DiceLoss_SurfaceLoss, self).__init__()
         self.surface_loss = SurfaceLoss()
+        self.dice_loss = BratsDiceLoss()
         self.epsilon = epsilon
         self.register_buffer('weight', weight)
         self.ignore_index = ignore_index
@@ -283,19 +236,10 @@ class DiceLoss_SurfaceLoss(nn.Module):
         surface_loss = self.surface_loss(input, target)
 
         # get probabilities from logits
-        input = self.normalization(input)
-        if self.weight is not None:
-            weight = Variable(self.weight, requires_grad=False)
-        else:
-            weight = None
-
-        if self.skip_last_target:
-            target = target[:, :-1, ...]
-
-        per_channel_dice = compute_per_channel_dice(input, target, epsilon=self.epsilon, ignore_index=self.ignore_index,
-                                                    weight=weight)
+        # input = self.normalization(input)
+        dice_loss = self.dice_loss(input, target)
         # Average the Dice score across all channels/classes
-        return torch.mean(1. - per_channel_dice) + surface_loss
+        return dice_loss + surface_loss
 
 
 class OhemDiceLoss(nn.Module):
@@ -372,7 +316,7 @@ class VaeLoss(nn.Module):
     def __init__(self, weight_L2=0.1, weight_KL=0.1):
         super(VaeLoss, self).__init__()
         self.boundary_loss = SurfaceLoss()
-        self.dice_loss = DiceLoss()
+        self.dice_loss = BratsDiceLoss()
         self.weight_L2 = weight_L2
         self.weight_KL = weight_KL
 

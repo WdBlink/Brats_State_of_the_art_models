@@ -520,10 +520,10 @@ class VaeBlock(nn.Module):
     def __init__(self, input_channels, output_channels, order="cbr", num_groups=8):
         super(VaeBlock, self).__init__()
         self.conv_block = SingleConv(input_channels, 1, order=order, num_groups=num_groups)
-        self.fcn = nn.Linear(7680, 128)
+        self.fcn = nn.Linear(9600, 128)
         self.fcn1 = nn.Linear(128, 64)
         self.fcn2 = nn.Linear(128, 64)
-        self.fcn3 = nn.Linear(128, 7680)
+        self.fcn3 = nn.Linear(128, 9600)
         self.conv1 = conv3d(1, 128, kernel_size=1, bias=True, padding=0)
         # self.greenblock = GreenBlock(128, 128)
         self.conv2 = conv3d(128, 64, kernel_size=1, bias=True, padding=0)
@@ -542,7 +542,7 @@ class VaeBlock(nn.Module):
         x = torch.reshape(x, (-1, 128))
 
         x = self.fcn3(x)
-        x = torch.reshape(x, (-1, 1, 20, 24, 16))
+        x = torch.reshape(x, (-1, 1, 20, 24, 20))
         x = self.conv1(x)
         x = F.upsample(x, size=[2*x.size(2), 2*x.size(3), 2*x.size(4)], mode='trilinear')
         # x = self.greenblock(x)

@@ -539,9 +539,9 @@ class VaeUNet(nn.Module):
         self.upblock3 = UpBlock(16, 8)
         self.convblock5 = SingleConv(24, 4, order=layer_order, num_groups=num_groups)
         self.convblock6 = SingleConv(4, 4, order=layer_order, num_groups=num_groups)
-        self.final_conv = conv3d(4, 4, kernel_size=1, bias=True, padding=0)
+        self.final_conv = conv3d(4, out_channels, kernel_size=1, bias=True, padding=0)
 
-        self.vae_block = VaeBlock(64, 4)
+        self.vae_block = VaeBlock(64, in_channels)
 
         if final_sigmoid:
             self.final_activation = nn.Sigmoid()
