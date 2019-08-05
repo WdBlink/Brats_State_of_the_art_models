@@ -62,22 +62,24 @@ class BinaryDiceLoss(nn.Module):
 
         # add ohem here
         if self.ohem_ratio:
-            num = torch.mul(predict, target)
-            den = predict.pow(self.p) + target.pow(self.p)
+            assert len(predict.view(-1)) == len(target.view(-1))
+            num = torch.mul(predict, target) + self.smooth/len(predict.view(-1))
+            den = predict.pow(self.p) + target.pow(self.p) + self.smooth/len(predict.view(-1))
+            loss_flatten = 1 - num/den # caclutate 1 - num/den for each pixel
+
+            # cacluate the mask
             with torch.no_grad():
-                num_values, _ = torch.topk(num.reshape(-1),
-                                           int(num.nelement()*self.ohem_ratio))
-                den_values, _ = torch.topk(den.reshape(-1),
-                                           int(den.nelement()*self.ohem_ratio))
-                num_mask = num >= num_values[-1]
-                den_mask = den >= den_values[-1]
-            num = torch.sum(num * num_mask.type(dtype=torch.float), dim=1) + self.smooth
-            den = torch.sum(den * den_mask.type(dtype=torch.float), dim=1) + self.smooth
+                values, _ = torch.topk(loss_flatten.reshape(-1),
+                                       int(loss_flatten.nelement()*self.ohem_ratio))
+                loss_mask = loss_flatten >= values[-1]
+
+            loss_flatten = loss_flatten * loss_mask.type(dtype=torch.float)
+            loss = loss_flatten.mean()
         else:
             num = torch.sum(torch.mul(predict, target), dim=1) + self.smooth
             den = torch.sum(predict.pow(self.p) + target.pow(self.p), dim=1) + self.smooth
+            loss = 1 - num / den
 
-        loss = 1 - num / den
 
         if self.reduction == 'mean':
             return loss.mean()
@@ -128,10 +130,12 @@ def test_binary_dice_loss():
     """
     test binary loss
     """
-    A = torch.zeros((3, 256, 256))
-    B = torch.ones((3, 256, 256))
+    A = torch.zeros((3, 10, 10))
+    A[:,:,:3] = 1
+    B = torch.zeros((3, 10, 10))
+    B[:,:,:3] = 1
     print(f"A.shape = {A.shape} B.shape = {B.shape}")
-    dl = BinaryDiceLoss(reduction='mean', ohem_ratio=0.5)
+    dl = BinaryDiceLoss(reduction='mean', ohem_ratio=0.2)
     loss = dl(A, B)
     print(loss)
 
@@ -149,4 +153,4 @@ def test_dice_loss():
 
 if __name__ == "__main__":
     test_binary_dice_loss()
-    test_dice_loss()
+    # test_dice_loss()
