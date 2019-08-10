@@ -253,7 +253,7 @@ class BraTSDataset(Dataset):
 
 class BratsDataset(torch.utils.data.Dataset):
     #mode must be trian, test or val
-    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False):
+    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False, doMixUp=True):
         super(BratsDataset, self).__init__()
         self.filePath = filePath
         self.mode = mode
@@ -262,6 +262,7 @@ class BratsDataset(torch.utils.data.Dataset):
         self.randomCrop = randomCrop
         self.hasMasks = hasMasks
         self.returnOffsets = returnOffsets
+        self.doMixUp = doMixUp
 
         #augmentation settings
         self.nnAugmentation = True
@@ -298,6 +299,78 @@ class BratsDataset(torch.utils.data.Dataset):
                 labels = np.expand_dims(labels, 3)
             defaultLabelValues = np.asarray([0], dtype=np.float32)
 
+        if self.nnAugmentation:
+            if self.hasMasks: labels = self._toEvaluationOneHot(np.squeeze(labels, 3))
+        else:
+            if self.mode == "train" and not self.softAugmentation and not self.trainOriginalClasses and self.hasMasks:
+                labels = self._toOrdinal(labels)
+                labels = self._toEvaluationOneHot(labels)
+
+        if self.mode == 'train' and self.doMixUp:
+            datasize = self.file["images_" + self.mode].shape[0]
+            idx = np.random.randint(0, datasize)
+            image2 = self.file["images_" + self.mode][idx, ...]
+            labels2 = self.file["masks_" + self.mode][idx, ...]
+
+            # Prepare data depeinding on soft/hard augmentation scheme
+            if not self.nnAugmentation:
+                if not self.trainOriginalClasses and (self.mode != "train" or self.softAugmentation):
+                    if self.hasMasks: labels2 = self._toEvaluationOneHot(labels2)
+                    defaultLabelValues = np.zeros(3, dtype=np.float32)
+                else:
+                    if self.hasMasks: labels2 = self._toOrignalCategoryOneHot(labels2)
+                    defaultLabelValues = np.asarray([1, 0, 0, 0, 0], dtype=np.float32)
+            elif self.hasMasks:
+                if labels2.ndim < 4:
+                    labels2 = np.expand_dims(labels2, 3)
+                defaultLabelValues = np.asarray([0], dtype=np.float32)
+
+            if self.nnAugmentation:
+                if self.hasMasks: labels2 = self._toEvaluationOneHot(np.squeeze(labels2, 3))
+            else:
+                if self.mode == "train" and not self.softAugmentation and not self.trainOriginalClasses and self.hasMasks:
+                    labels2 = self._toOrdinal(labels2)
+                    labels2 = self._toEvaluationOneHot(labels2)
+
+            # alpha = 1.0  # Hyperparameter
+            # m = 0.3      # Hyperparameter
+            # lam = np.random.beta(alpha, alpha)
+            # image = lam * image + (1 - lam) * image2
+            #
+            # target = np.zeros_like(labels)
+            # if lam > m:
+            #     target = target + labels
+            # if (1 - lam) > m:
+            #     target = target + labels2
+            # target[target > 1] = 1
+            # labels = target
+
+            m1 = 0.3
+            m2 = 0.2
+            m3 = 0.1
+            alpha = 1.0
+            lam = np.random.beta(alpha, alpha)
+            image = lam * image + (1 - lam) * image2
+
+            target = np.zeros_like(labels)
+            if lam > m1:
+                target[..., 0] = target[..., 0] + labels[..., 0]
+            if (1 - lam) > m1:
+                target[..., 0] = target[..., 0] + labels2[..., 0]
+
+            if lam > m2:
+                target[..., 1] = target[..., 1] + labels[..., 1]
+            if (1 - lam) > m2:
+                target[..., 1] = target[..., 1] + labels2[..., 1]
+
+            if lam > m3:
+                target[..., 2] = target[..., 2] + labels[..., 2]
+            if (1 - lam) > m3:
+                target[..., 2] = target[..., 2] + labels2[..., 2]
+
+            target[target > 1] = 1
+            labels = target
+
         #augment data
         if self.mode == "train":
             image, labels = aug.augment3DImage(image,
@@ -313,13 +386,6 @@ class BratsDataset(torch.utils.data.Dataset):
                                                self.sigma,
                                                self.doIntensityShift,
                                                self.maxIntensityShift)
-
-        if self.nnAugmentation:
-            if self.hasMasks: labels = self._toEvaluationOneHot(np.squeeze(labels, 3))
-        else:
-            if self.mode == "train" and not self.softAugmentation and not self.trainOriginalClasses and self.hasMasks:
-                labels = self._toOrdinal(labels)
-                labels = self._toEvaluationOneHot(labels)
 
         # random crop
         if not self.randomCrop is None:
