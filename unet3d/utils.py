@@ -40,16 +40,16 @@ def save_checkpoint(state, is_best, checkpoint_dir, logger=None):
             logger.info(message)
 
     if not os.path.exists(checkpoint_dir):
-        logger.info(
+        log_info(
             f"Checkpoint directory does not exists. Creating {checkpoint_dir}")
         os.mkdir(checkpoint_dir)
 
     last_file_path = os.path.join(checkpoint_dir, 'last_checkpoint.pytorch')
-    logger.info(f"Saving last checkpoint to '{last_file_path}'")
+    log_info(f"Saving last checkpoint to '{last_file_path}'")
     torch.save(state, last_file_path)
     if is_best:
         best_file_path = os.path.join(checkpoint_dir, 'best_checkpoint.pytorch')
-        logger.info(f"Saving best checkpoint to '{best_file_path}'")
+        log_info(f"Saving best checkpoint to '{best_file_path}'")
         shutil.copyfile(last_file_path, best_file_path)
 
 
@@ -70,7 +70,10 @@ def load_checkpoint(checkpoint_path, model, optimizer=None):
         raise IOError(f"Checkpoint '{checkpoint_path}' does not exist")
 
     state = torch.load(checkpoint_path)
-    model.load_state_dict(state['model_state_dict'])
+    try:
+        model.load_state_dict(state['model_state_dict'])
+    except BaseException as e:
+        print('Failed to do something: ' + str(e))
 
     if optimizer is not None:
         optimizer.load_state_dict(state['optimizer_state_dict'])
@@ -86,8 +89,8 @@ def get_logger(name, level=logging.INFO):
     formatter = logging.Formatter(
         '%(asctime)s [%(threadName)s] %(levelname)s %(name)s - %(message)s')
     stream_handler.setFormatter(formatter)
-    # logger.addHandler(stream_handler)
-    # logger.removeHandler(stream_handler)
+    logger.addHandler(stream_handler)
+
     return logger
 
 

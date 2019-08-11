@@ -7,13 +7,12 @@ import datetime
 from unet3d.config import load_config
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-import matplotlib.pyplot as plt
-from preprocess.partitioning import get_all_partition_ids
-from numpy import random
+from tqdm import tqdm
 from visualization import board_add_images
-import BraTS
 
 from . import utils
+
+config = load_config()
 
 
 class UNet3DTrainer:
@@ -51,10 +50,11 @@ class UNet3DTrainer:
                  validate_iters=None, num_iterations=1, num_epoch=0,
                  eval_score_higher_is_better=True, best_eval_score=None,
                  logger=None):
-        if logger is None:
-            self.logger = utils.get_logger('VaeUnetTrainer', level=logging.DEBUG)
-        else:
-            self.logger = logger
+        # if logger is None:
+        #     self.logger = utils.get_logger('VaeUnetTrainer', level=logging.DEBUG)
+        # else:
+        #     self.logger = logger
+        self.logger = logger
         self.config = load_config()
         self.logger.info(model)
         self.model = model
@@ -72,7 +72,7 @@ class UNet3DTrainer:
         self.log_after_iters = log_after_iters
         self.validate_iters = validate_iters
         self.eval_score_higher_is_better = eval_score_higher_is_better
-        self.logger.info(f'eval_score_higher_is_better: {eval_score_higher_is_better}')
+        logger.info(f'eval_score_higher_is_better: {eval_score_higher_is_better}')
 
         if best_eval_score is not None:
             self.best_eval_score = best_eval_score
@@ -98,7 +98,9 @@ class UNet3DTrainer:
         logger.info(f"Loading checkpoint '{checkpoint_path}'...")
         state = utils.load_checkpoint(checkpoint_path, model, optimizer)
         logger.info(
-            f"Checkpoint loaded. Epoch: {state['epoch']}. Best val score: {state['best_eval_score']}. Num_iterations: {state['num_iterations']}")
+            f"Checkpoint loaded. Epoch: {state['epoch']}. "
+            f"Best val score: {state['best_eval_score']}. "
+            f"Num_iterations: {state['num_iterations']}")
         checkpoint_dir = os.path.split(checkpoint_path)[0]
         return cls(model, optimizer, lr_scheduler,
                    loss_criterion, eval_criterion,
@@ -113,7 +115,7 @@ class UNet3DTrainer:
                    validate_after_iters=state['validate_after_iters'],
                    log_after_iters=state['log_after_iters'],
                    validate_iters=state['validate_iters'],
-                   model_name="VaeUNet",
+                   model_name=config['model']['name'],
                    logger=logger)
 
     @classmethod
@@ -126,7 +128,8 @@ class UNet3DTrainer:
                         logger=None):
         logger.info(f"Logging pre-trained model from '{pre_trained}'...")
         utils.load_checkpoint(pre_trained, model, None)
-        checkpoint_dir = os.path.split(pre_trained)[0]
+        # checkpoint_dir = os.path.split(pre_trained)[0]
+        checkpoint_dir = config['trainer']['checkpoint_dir']
         return cls(model, optimizer, lr_scheduler,
                    loss_criterion, eval_criterion,
                    device, loaders, checkpoint_dir,
@@ -139,6 +142,7 @@ class UNet3DTrainer:
                    validate_after_iters=validate_after_iters,
                    log_after_iters=log_after_iters,
                    validate_iters=validate_iters,
+                   model_name=config['model']['name'],
                    logger=logger)
 
     def fit(self):
@@ -152,16 +156,7 @@ class UNet3DTrainer:
                 self.optimizer.swap_swa_sgd()
             self.num_epoch += 1
 
-    def draw_picture(self, sample):
-
-        fig = plt.figure()
-        feature_image = fig.add_subplot(1, 1, 1)
-        plt.imshow(sample, cmap="gray")
-        feature_image.set_title('output')
-        plt.savefig('picture/{}.png'.format(random.randint(1, 1000)))
-        plt.close()
-
-    def train(self, train_loader, is_choose_randomly=False, is_mixup=False):
+    def train(self, train_loader):
         """Trains the model for 1 epoch.
 
         Args:
@@ -170,34 +165,6 @@ class UNet3DTrainer:
         Returns:
             True if the training should be terminated immediately, False otherwise
         """
-        def _make_crop(input):
-            image = input[..., 40:200, 40:200, 21:117]
-            # image = input[..., 40:200, 24:216, 13:141]
-            return image
-
-        def _make_one_hot(input):
-            seg = np.eye(5)[input].transpose(3, 0, 1, 2)
-            seg = seg[[0, 1, 2, 4], :, :, :]
-            return seg
-
-        def _preprocessing_images(image):
-            _image = _make_crop(image)
-            _image_max = np.max(_image)
-            import augment.transforms as transforms
-            transforms = transforms.Compose(
-                [transforms.ToTensor(expand_dims=True),
-                 transforms.RangeNormalize(max_value=_image_max),
-                 transforms.Normalize(std=0.5, mean=0.5)])
-            _image = transforms(_image).unsqueeze(0)
-            _image = _image.to(self.device)
-            return _image
-
-        def _preprocessing_labels(label):
-            _label = _make_crop(label)
-            _label = _make_one_hot(_label)
-            _label = torch.from_numpy(_label).unsqueeze(0)
-            _label = _label.to(self.device)
-            return _label
 
         train_losses = utils.RunningAverage()
         train_eval_scores_multi = utils.RunningAverageMulti()
@@ -205,170 +172,81 @@ class UNet3DTrainer:
         # sets the model in training mode
         self.model.train()
 
-        if is_choose_randomly:
-            train_ids, test_ids, validation_ids = get_all_partition_ids()
-            train_id_list = []
-            for train_id in train_ids:
-                train_id_list.append(train_id)
+        for i, t in enumerate(tqdm(train_loader)):
 
-            loaders_config = self.config['loaders']
-            data_paths = loaders_config['dataset_path']
-            brats = BraTS.DataSet(brats_root=data_paths[0], year=2019)
-            index = np.random.permutation(len(train_id_list))
+            print(
+                f'Training iteration {self.num_iterations}. '
+                f'Batch {i}. '
+                f'Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
 
-            for i in range(0, len(train_id_list)):
+            input, pid, target = self._split_training_batch(t)
 
-                if is_mixup:
-                    idx = random.randint(0, len(train_id_list))
-                    patient1 = brats.train.patient(train_id_list[idx])
-                    patient2 = brats.train.patient(train_id_list[index[idx]])
-                    images1 = _preprocessing_images(patient1.mri)
-                    images2 = _preprocessing_images(patient2.mri)
-                    labels1 = _preprocessing_labels(patient1.seg)
-                    labels2 = _preprocessing_labels(patient2.seg)
-                    alpha = 1.0  # 超参数
-                    lam = np.random.beta(alpha, alpha)
-                    input = lam * images1 + (1 - lam) * images2
-                    target = lam * labels1 + (1 - lam) * labels2
-                    # print("eq sum target", target.eq(labels1.data).cpu().sum())
-                    self.logger.info(
-                        f'Using mixup. Training iteration {self.num_iterations}. '
-                        f'Batch {i}. Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
+            output, loss = self._forward_pass(input, target, weight=None)
+
+            # output_sample = output[0, 1, :, :, 80].cpu().detach().numpy()
+            # self.draw_picture(output_sample)
+
+            train_losses.update(loss.item(), self._batch_size(input))
+
+            # compute gradients and update parameters
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+            if self.num_iterations % self.validate_after_iters == 0:
+                # evaluate on validation set
+                eval_score = self.validate(self.loaders['val'])
+                # adjust learning rate if necessary
+                # if isinstance(self.scheduler, ReduceLROnPlateau):
+                    # self.scheduler.step(eval_score)
+                if self.scheduler is None:
+                    pass
                 else:
-                    idx = random.randint(0, len(train_id_list))
-                    patient = brats.train.patient(train_id_list[idx])
-                    images = patient.mri
-                    labels = patient.seg
-                    input = _preprocessing_images(images)
-                    target = _preprocessing_labels(labels)
-                    self.logger.info(f'Patient ID {train_id_list[idx]}. Training iteration {self.num_iterations}. '
-                                     f'Batch {i}. Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
+                    self.scheduler.step()
+                    # pass
 
-                output, loss = self._forward_pass(input, target)
+                # log current learning rate in tensorboard
+                self._log_lr()
 
-                train_losses.update(loss.item())
+                # remember best validation metric
+                is_best = self._is_best_eval_score(eval_score)
 
-                # compute gradients and update parameters
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+                # save checkpoint
+                self._save_checkpoint(is_best)
 
-                if self.num_iterations % self.validate_after_iters == 0:
-                    # evaluate on validation set
-                    eval_score = self.validate(self.loaders['val'])
-                    # log current learning rate in tensorboard
-                    self._log_lr()
-                    # remember best validation metric
-                    is_best = self._is_best_eval_score(eval_score)
+            if self.num_iterations % self.log_after_iters == 0:
+                # if model contains final_activation layer for normalizing logits apply it, otherwise both
+                # the evaluation metric as well as images in tensorboard will be incorrectly computed
+                if hasattr(self.model, 'final_activation'):
+                    output = self.model.final_activation(output)
 
-                    # save checkpoint
-                    self._save_checkpoint(is_best)
+                # visualize the feature map to tensorboard
+                board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
+                board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
 
-                if self.num_iterations % self.log_after_iters == 0:
-                    # if model contains final_activation layer for normalizing logits apply it, otherwise both
-                    # the evaluation metric as well as images in tensorboard will be incorrectly computed
-                    if hasattr(self.model, 'final_activation'):
-                        output = self.model.final_activation(output)
+                # compute eval criterion
+                eval_score = self.eval_criterion(output, target)
+                # train_eval_scores.update(eval_score.item(), self._batch_size(input))
+                train_eval_scores_multi.update(eval_score, self._batch_size(input))
 
-                    # visualize the feature map to tensorboard
-                    board_list = [input[0:1, 1:4, :, :, 64], output[0:1, 1:4, :, :, 64], target[0:1, 1:4, :, :, 64]]
-                    board_add_images(self.writer, 'feature map', board_list, self.num_iterations)
-
-                    # compute eval criterion
-                    eval_score = self.eval_criterion(output, target)
-                    # train_eval_scores.update(eval_score.item(), self._batch_size(input))
-                    train_eval_scores_multi.update(eval_score, self._batch_size(input))
-
-                    # log stats, params and images
-                    self.logger.info(
-                        f'Training stats. Loss: {train_losses.avg}. '
-                        f'Evaluation score WT:{train_eval_scores_multi.avg1}, '
-                        f'TC:{train_eval_scores_multi.avg2}, '
-                        f'ET:{train_eval_scores_multi.avg3}')
-                    self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.avg1,
-                                          train_eval_scores_multi.avg2, train_eval_scores_multi.avg3)
-                    self._log_params()
-
-                    # self._log_images(input, target, output)
-
-                if self.max_num_iterations < self.num_iterations:
-                    self.logger.info(
-                        f'Maximum number of iterations {self.max_num_iterations} exceeded. Finishing training...')
-                    return True
-
-                self.num_iterations += 1
-        else:
-
-            for i, t in enumerate(train_loader):
-
+                # log stats, params and images
                 self.logger.info(
-                    f'Training iteration {self.num_iterations}. Batch {i}. Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
+                    f'Training stats. Loss: {train_losses.avg}. '
+                    f'Evaluation score WT:{train_eval_scores_multi.avg1}, '
+                    f'TC:{train_eval_scores_multi.avg2}, '
+                    f'ET:{train_eval_scores_multi.avg3}')
+                self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.avg1,
+                                      train_eval_scores_multi.avg2, train_eval_scores_multi.avg3)
+                # self._log_params()
 
-                input, pid, target = self._split_training_batch(t)
+                # self._log_images(input, target, output)
 
-                output, loss = self._forward_pass(input, target, weight=None)
+            if self.max_num_iterations < self.num_iterations:
+                self.logger.info(
+                    f'Maximum number of iterations {self.max_num_iterations} exceeded. Finishing training...')
+                return True
 
-                # output_sample = output[0, 1, :, :, 80].cpu().detach().numpy()
-                # self.draw_picture(output_sample)
-
-                train_losses.update(loss.item(), self._batch_size(input))
-
-                # compute gradients and update parameters
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-
-                if self.num_iterations % self.validate_after_iters == 0:
-                    # evaluate on validation set
-                    eval_score = self.validate(self.loaders['val'])
-                    # adjust learning rate if necessary
-                    if isinstance(self.scheduler, ReduceLROnPlateau):
-                        # self.scheduler.step(eval_score)
-                        pass
-                    else:
-                        # self.scheduler.step()
-                        pass
-                    # log current learning rate in tensorboard
-                    self._log_lr()
-                    # remember best validation metric
-                    is_best = self._is_best_eval_score(eval_score)
-
-                    # save checkpoint
-                    self._save_checkpoint(is_best)
-
-                if self.num_iterations % self.log_after_iters == 0:
-                    # if model contains final_activation layer for normalizing logits apply it, otherwise both
-                    # the evaluation metric as well as images in tensorboard will be incorrectly computed
-                    if hasattr(self.model, 'final_activation'):
-                        output = self.model.final_activation(output)
-
-                    # visualize the feature map to tensorboard
-                    board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
-                    board_add_images(self.writer, 'feature map', board_list, self.num_iterations)
-
-                    # compute eval criterion
-                    eval_score = self.eval_criterion(output, target)
-                    # train_eval_scores.update(eval_score.item(), self._batch_size(input))
-                    train_eval_scores_multi.update(eval_score, self._batch_size(input))
-
-                    # log stats, params and images
-                    self.logger.info(
-                        f'Training stats. Loss: {train_losses.avg}. '
-                        f'Evaluation score WT:{train_eval_scores_multi.avg1}, '
-                        f'TC:{train_eval_scores_multi.avg2}, '
-                        f'ET:{train_eval_scores_multi.avg3}')
-                    self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.avg1,
-                                          train_eval_scores_multi.avg2, train_eval_scores_multi.avg3)
-                    self._log_params()
-
-                    # self._log_images(input, target, output)
-
-                if self.max_num_iterations < self.num_iterations:
-                    self.logger.info(
-                        f'Maximum number of iterations {self.max_num_iterations} exceeded. Finishing training...')
-                    return True
-
-                self.num_iterations += 1
+            self.num_iterations += 1
 
         return False
 
@@ -395,6 +273,10 @@ class UNet3DTrainer:
 
                     # val_scores.update(eval_score.item(), self._batch_size(input))
                     val_scores_multi.update(eval_score, self._batch_size(input))
+
+                    # visualize the feature map to tensorboard
+                    board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
+                    board_add_images(self.writer, 'validate_output', board_list, self.num_iterations)
 
                     if self.validate_iters is not None and self.validate_iters <= i:
                         # stop validation
@@ -433,8 +315,11 @@ class UNet3DTrainer:
         output = self.model(input)
 
         # compute the loss
-        if self.model_name == "VaeUNet":
+        if self.model_name == 'NNNet_Vae':
             loss = self.loss_criterion(input, output[1], output[0], target, output[2], output[3])
+            output = output[0]
+        elif self.model_name == 'NNNet_Cae':
+            loss = self.loss_criterion(input, target, output[0], output[1])
             output = output[0]
         else:
             if weight is None:
@@ -497,12 +382,11 @@ class UNet3DTrainer:
         for tag, value in tag_value.items():
             self.writer.add_scalar(tag, value, self.num_iterations)
 
-
     def _log_params(self):
         self.logger.info('Logging model parameters and gradients')
         for name, value in self.model.named_parameters():
             self.writer.add_histogram(name, value.data.cpu().numpy(), self.num_iterations)
-            self.writer.add_histogram(name + '/grad', value.grad.data.cpu().numpy(), self.num_iterations)
+            self.writer.add_histogram(name + '_grad', value.grad.data.cpu().numpy(), self.num_iterations)
 
     def _log_images(self, input, target, prediction):
         inputs_map = {

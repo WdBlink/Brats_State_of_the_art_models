@@ -8,9 +8,15 @@ import matplotlib.pyplot as plt
 import random
 
 from unet3d.buildingblocks import conv3d, Encoder, Decoder, FinalConv, DoubleConv, \
-    ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock, unetUp, unetConv3, \
-    EncoderModule, DecoderModule
+    ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock, CaeBlock, unetUp, unetConv3, \
+    EncoderModule, DecoderModule, ResEncoderModule, ResDecoderModule, \
+    UnetConv3, UnetUp3_CT, UnetGridGatingSignal3, UnetDsv3, GridAttentionBlockND, \
+    MedicaNetBasicBlock, MedicaNetBottleneck
+
 from unet3d.utils import create_feature_maps
+import torch.nn.functional as F
+from functools import partial
+from torch.autograd import Variable
 
 
 # initalize the module
@@ -590,32 +596,6 @@ class VaeUNet(nn.Module):
         return output, vae_out, z_mean, z_var
 
 
-
-# initalize the module
-def init_weights(net, init_type='normal'):
-    # print('initialization method [%s]' % init_type)
-    if init_type == 'kaiming':
-        net.apply(weights_init_kaiming)
-    else:
-        raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
-
-def weights_init_kaiming(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
-    elif classname.find('Linear') != -1:
-        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
-    elif classname.find('BatchNorm') != -1:
-        init.normal_(m.weight.data, 1.0, 0.02)
-        init.constant_(m.bias.data, 0.0)
-
-# compute model params
-def count_param(model):
-    param_count = 0
-    for param in model.parameters():
-        param_count += param.view(-1).size()[0]
-    return param_count
-
 class unetConv3(nn.Module):
 
     def __init__(self, in_size, out_size, is_batchnorm, n=2, ks=3, stride=1, padding=1):
@@ -646,6 +626,7 @@ class unetConv3(nn.Module):
             x = conv(x)
 
         return x
+
 
 class unetUp(nn.Module):
 
@@ -813,3 +794,529 @@ class NoNewNet(nn.Module):
         x = self.lastConv(x)
         x = torch.sigmoid(x)
         return x
+
+
+class ResNoNewNet(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(ResNoNewNet, self).__init__()
+        channels = 30
+        self.levels = 5
+
+        self.lastConv = nn.Conv3d(channels, 3, 1, bias=True)
+
+        #create encoder levels
+        encoderModules = []
+        encoderModules.append(ResEncoderModule(4, channels, False, True))
+        for i in range(self.levels - 2):
+            encoderModules.append(ResEncoderModule(channels * pow(2, i), channels * pow(2, i+1), True, True))
+        encoderModules.append(ResEncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), True, False))
+        self.encoders = nn.ModuleList(encoderModules)
+
+        #create decoder levels
+        decoderModules = []
+        decoderModules.append(ResDecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, False))
+        for i in range(self.levels - 2):
+            decoderModules.append(ResDecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
+        decoderModules.append(ResDecoderModule(channels, channels, False, True))
+        self.decoders = nn.ModuleList(decoderModules)
+
+    def forward(self, x):
+        inputStack = []
+        for i in range(self.levels):
+            x = self.encoders[i](x)
+            if i < self.levels - 1:
+                inputStack.append(x)
+
+        for i in range(self.levels):
+            x = self.decoders[i](x)
+            if i < self.levels - 1:
+                x = x + inputStack.pop()
+
+        x = self.lastConv(x)
+        x = torch.sigmoid(x)
+        return x
+
+
+class NNNet_Vae(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(NNNet_Vae, self).__init__()
+        channels = 30
+        self.levels = 5
+
+        self.lastConv = nn.Conv3d(channels, 3, 1, bias=True)
+
+        # create encoder levels
+        encoderModules = []
+        encoderModules.append(EncoderModule(4, channels, False, True))
+        for i in range(self.levels - 2):
+            encoderModules.append(EncoderModule(channels * pow(2, i), channels * pow(2, i + 1), True, True))
+        encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1),
+                                            True, False))
+        self.encoders = nn.ModuleList(encoderModules)
+
+        # create decoder levels
+        decoderModules = []
+        decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2),
+                                            True, False))
+        for i in range(self.levels - 2):
+            decoderModules.append(DecoderModule(
+                channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
+        decoderModules.append(DecoderModule(channels, channels, False, True))
+        self.decoders = nn.ModuleList(decoderModules)
+
+        self.vae_block = VaeBlock(480, in_channels)
+
+    def forward(self, x):
+        inputStack = []
+        for i in range(self.levels):
+            x = self.encoders[i](x)
+            if i < self.levels - 1:
+                inputStack.append(x)
+
+        vae_out, z_mean, z_var = self.vae_block(x)
+
+        for i in range(self.levels):
+            x = self.decoders[i](x)
+            if i < self.levels - 1:
+                x = x + inputStack.pop()
+
+        x = self.lastConv(x)
+        x = torch.sigmoid(x)
+        return x, vae_out, z_mean, z_var
+
+
+class NNNet_Cae(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(NNNet_Cae, self).__init__()
+        channels = 30
+        self.levels = 5
+
+        self.lastConv = nn.Conv3d(channels, out_channels, 1, bias=True)
+
+        # create encoder levels
+        encoderModules = []
+        encoderModules.append(ResEncoderModule(4, channels, False, True))
+        for i in range(self.levels - 2):
+            encoderModules.append(ResEncoderModule(channels * pow(2, i), channels * pow(2, i + 1), True, True))
+        encoderModules.append(ResEncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1),
+                                            True, False))
+        self.encoders = nn.ModuleList(encoderModules)
+
+        self.greenblock = GreenBlock(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 1))
+        # create decoder levels
+        decoderModules = []
+        decoderModules.append(ResDecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2),
+                                            True, False))
+        for i in range(self.levels - 2):
+            decoderModules.append(ResDecoderModule(
+                channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
+        decoderModules.append(ResDecoderModule(channels, channels, False, True))
+        self.decoders = nn.ModuleList(decoderModules)
+
+        self.Cae_block = CaeBlock(480, in_channels)
+
+    def forward(self, x):
+        inputStack = []
+        for i in range(self.levels):
+            x = self.encoders[i](x)
+            if i < self.levels - 1:
+                inputStack.append(x)
+
+        x = self.greenblock(x)
+        cae_out = self.Cae_block(x)
+
+        for i in range(self.levels):
+            x = self.decoders[i](x)
+            if i < self.levels - 1:
+                x = x + inputStack.pop()
+
+        x = self.lastConv(x)
+        x = torch.sigmoid(x)
+        return x, cae_out
+
+
+class unet_CT_multi_att_dsv_3D(nn.Module):
+
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 feature_scale=4, is_deconv=True,
+                 nonlocal_mode='concatenation', attention_dsample=(2,2,2), is_batchnorm=True, **kwargs):
+        super(unet_CT_multi_att_dsv_3D, self).__init__()
+        self.is_deconv = is_deconv
+        self.in_channels = in_channels
+        self.is_batchnorm = is_batchnorm
+        self.feature_scale = feature_scale
+
+        filters = [32, 64, 128, 256, 512]
+        filters = [int(x / self.feature_scale) for x in filters]
+
+        # downsampling
+        self.conv1 = UnetConv3(self.in_channels, filters[0], self.is_batchnorm, kernel_size=(3,3,3), padding_size=(1,1,1))
+        self.maxpool1 = nn.MaxPool3d(kernel_size=(2, 2, 2))
+
+        self.conv2 = UnetConv3(filters[0], filters[1], self.is_batchnorm, kernel_size=(3,3,3), padding_size=(1,1,1))
+        self.maxpool2 = nn.MaxPool3d(kernel_size=(2, 2, 2))
+
+        self.conv3 = UnetConv3(filters[1], filters[2], self.is_batchnorm, kernel_size=(3,3,3), padding_size=(1,1,1))
+        self.maxpool3 = nn.MaxPool3d(kernel_size=(2, 2, 2))
+
+        self.conv4 = UnetConv3(filters[2], filters[3], self.is_batchnorm, kernel_size=(3,3,3), padding_size=(1,1,1))
+        self.maxpool4 = nn.MaxPool3d(kernel_size=(2, 2, 2))
+
+        self.center = UnetConv3(filters[3], filters[4], self.is_batchnorm, kernel_size=(3,3,3), padding_size=(1,1,1))
+        self.gating = UnetGridGatingSignal3(filters[4], filters[4], kernel_size=(1, 1, 1), is_batchnorm=self.is_batchnorm)
+
+        # attention blocks
+        self.attentionblock2 = MultiAttentionBlock(in_size=filters[1], gate_size=filters[2], inter_size=filters[1],
+                                                   nonlocal_mode=nonlocal_mode, sub_sample_factor= attention_dsample)
+        self.attentionblock3 = MultiAttentionBlock(in_size=filters[2], gate_size=filters[3], inter_size=filters[2],
+                                                   nonlocal_mode=nonlocal_mode, sub_sample_factor= attention_dsample)
+        self.attentionblock4 = MultiAttentionBlock(in_size=filters[3], gate_size=filters[4], inter_size=filters[3],
+                                                   nonlocal_mode=nonlocal_mode, sub_sample_factor= attention_dsample)
+
+        # upsampling
+        self.up_concat4 = UnetUp3_CT(filters[4], filters[3], is_batchnorm)
+        self.up_concat3 = UnetUp3_CT(filters[3], filters[2], is_batchnorm)
+        self.up_concat2 = UnetUp3_CT(filters[2], filters[1], is_batchnorm)
+        self.up_concat1 = UnetUp3_CT(filters[1], filters[0], is_batchnorm)
+
+        # deep supervision
+        self.dsv4 = UnetDsv3(in_size=filters[3], out_size=out_channels, scale_factor=8)
+        self.dsv3 = UnetDsv3(in_size=filters[2], out_size=out_channels, scale_factor=4)
+        self.dsv2 = UnetDsv3(in_size=filters[1], out_size=out_channels, scale_factor=2)
+        self.dsv1 = nn.Conv3d(in_channels=filters[0], out_channels=out_channels, kernel_size=1)
+
+        # final conv (without any concat)
+        self.final = nn.Conv3d(out_channels*4, out_channels, 1)
+
+        # initialise weights
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                init_weights(m, init_type='kaiming')
+            elif isinstance(m, nn.BatchNorm3d):
+                init_weights(m, init_type='kaiming')
+
+    def forward(self, inputs):
+        # Feature Extraction
+        conv1 = self.conv1(inputs)
+        maxpool1 = self.maxpool1(conv1)
+
+        conv2 = self.conv2(maxpool1)
+        maxpool2 = self.maxpool2(conv2)
+
+        conv3 = self.conv3(maxpool2)
+        maxpool3 = self.maxpool3(conv3)
+
+        conv4 = self.conv4(maxpool3)
+        maxpool4 = self.maxpool4(conv4)
+
+        # Gating Signal Generation
+        center = self.center(maxpool4)
+        gating = self.gating(center)
+
+        # Attention Mechanism
+        # Upscaling Part (Decoder)
+        g_conv4, att4 = self.attentionblock4(conv4, gating)
+        up4 = self.up_concat4(g_conv4, center)
+        g_conv3, att3 = self.attentionblock3(conv3, up4)
+        up3 = self.up_concat3(g_conv3, up4)
+        g_conv2, att2 = self.attentionblock2(conv2, up3)
+        up2 = self.up_concat2(g_conv2, up3)
+        up1 = self.up_concat1(conv1, up2)
+
+        # Deep Supervision
+        dsv4 = self.dsv4(up4)
+        dsv3 = self.dsv3(up3)
+        dsv2 = self.dsv2(up2)
+        dsv1 = self.dsv1(up1)
+        final = self.final(torch.cat([dsv1,dsv2,dsv3,dsv4], dim=1))
+        final = torch.sigmoid(final)
+
+        return final
+
+
+    @staticmethod
+    def apply_argmax_softmax(pred):
+        log_p = F.softmax(pred, dim=1)
+
+        return log_p
+
+
+class MultiAttentionBlock(nn.Module):
+    def __init__(self, in_size, gate_size, inter_size, nonlocal_mode, sub_sample_factor):
+        super(MultiAttentionBlock, self).__init__()
+        self.gate_block_1 = GridAttentionBlockND(in_channels=in_size, gating_channels=gate_size,
+                                                 inter_channels=inter_size, mode=nonlocal_mode,
+                                                 sub_sample_factor= sub_sample_factor)
+        self.gate_block_2 = GridAttentionBlockND(in_channels=in_size, gating_channels=gate_size,
+                                                 inter_channels=inter_size, mode=nonlocal_mode,
+                                                 sub_sample_factor=sub_sample_factor)
+        self.combine_gates = nn.Sequential(nn.Conv3d(in_size*2, in_size, kernel_size=1, stride=1, padding=0),
+                                           nn.BatchNorm3d(in_size),
+                                           nn.ReLU(inplace=True)
+                                           )
+
+        # initialise the blocks
+        for m in self.children():
+            if m.__class__.__name__.find('GridAttentionBlock3D') != -1: continue
+            init_weights(m, init_type='kaiming')
+
+    def forward(self, input, gating_signal):
+        gate_1, attention_1 = self.gate_block_1(input, gating_signal)
+        gate_2, attention_2 = self.gate_block_2(input, gating_signal)
+
+        return self.combine_gates(torch.cat([gate_1, gate_2], 1)), torch.cat([attention_1, attention_2], 1)
+
+
+class ResNet(nn.Module):
+
+    def __init__(self,
+                 block,
+                 layers,
+                 sample_input_D,
+                 sample_input_H,
+                 sample_input_W,
+                 num_seg_classes,
+                 shortcut_type='B',
+                 no_cuda=False):
+        self.inplanes = 64
+        self.no_cuda = no_cuda
+        super(ResNet, self).__init__()
+        self.conv1 = nn.Conv3d(
+            4,
+            64,
+            kernel_size=7,
+            stride=(2, 2, 2),
+            padding=(3, 3, 3),
+            bias=False)
+
+        self.bn1 = nn.BatchNorm3d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool3d(kernel_size=(3, 3, 3), stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0], shortcut_type)
+        self.layer2 = self._make_layer(
+            block, 128, layers[1], shortcut_type, stride=2)
+        self.layer3 = self._make_layer(
+            block, 256, layers[2], shortcut_type, stride=1, dilation=2)
+        self.layer4 = self._make_layer(
+            block, 512, layers[3], shortcut_type, stride=1, dilation=4)
+
+        self.level1 = nn.Conv3d(512 * block.expansion, 256, kernel_size=3, padding=1, bias=False)
+        self.bn_1 = nn.BatchNorm3d(256)
+        self.relu1 = nn.ReLU(inplace=True)
+
+        self.level2 = nn.Conv3d(256, 64, kernel_size=3 ,padding=1, bias=False)
+        self.bn_2 = nn.BatchNorm3d(64)
+        self.relu2 = nn.ReLU(inplace=True)
+
+        self.level3 = nn.Conv3d(64, 32, kernel_size=3, padding=1, bias=False)
+        self.bn_3 = nn.BatchNorm3d(32)
+        self.relu3 = nn.ReLU(inplace=True)
+
+        self.final_conv = nn.Conv3d(
+                                    32,
+                                    num_seg_classes,
+                                    kernel_size=1,
+                                    stride=(1, 1, 1),
+                                    bias=False)
+
+        self.conv_seg = nn.Sequential(
+            nn.ConvTranspose3d(
+                512 * block.expansion,
+                512,
+                2,
+                stride=2
+            ),
+            nn.BatchNorm3d(512),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(
+                512,
+                512,
+                kernel_size=3,
+                stride=(1, 1, 1),
+                padding=(1, 1, 1),
+                bias=False),
+            nn.BatchNorm3d(512),
+            nn.ReLU(inplace=True),
+
+            nn.ConvTranspose3d(
+                512,
+                256,
+                2,
+                stride=2
+            ),
+            nn.BatchNorm3d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(
+                256,
+                256,
+                kernel_size=3,
+                stride=(1, 1, 1),
+                padding=(1, 1, 1),
+                bias=False),
+            nn.BatchNorm3d(256),
+            nn.ReLU(inplace=True),
+
+            nn.ConvTranspose3d(
+                256,
+                32,
+                2,
+                stride=2
+            ),
+            nn.BatchNorm3d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(
+                32,
+                32,
+                kernel_size=3,
+                stride=(1, 1, 1),
+                padding=(1, 1, 1),
+                bias=False),
+            nn.BatchNorm3d(32),
+            nn.ReLU(inplace=True),
+
+            nn.Conv3d(
+                32,
+                num_seg_classes,
+                kernel_size=1,
+                stride=(1, 1, 1),
+                bias=False)
+        )
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                m.weight = nn.init.kaiming_normal(m.weight, mode='fan_out')
+            elif isinstance(m, nn.BatchNorm3d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
+    def _make_layer(self, block, planes, blocks, shortcut_type, stride=1, dilation=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            if shortcut_type == 'A':
+                downsample = partial(
+                    downsample_basic_block,
+                    planes=planes * block.expansion,
+                    stride=stride,
+                    no_cuda=self.no_cuda)
+            else:
+                downsample = nn.Sequential(
+                    nn.Conv3d(
+                        self.inplanes,
+                        planes * block.expansion,
+                        kernel_size=1,
+                        stride=stride,
+                        bias=False), nn.BatchNorm3d(planes * block.expansion))
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride=stride, dilation=dilation, downsample=downsample))
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes, dilation=dilation))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x0 = x
+        x = self.conv1(x)   #(1,64,64,64,64)
+        x = self.bn1(x)     #(1,64,64,64,64)
+        x1 = self.relu(x)
+        x = self.maxpool(x1) #(1,64,32,32,32)
+        x2 = self.layer1(x)  #(1,64,32,32,32)
+        x = self.layer2(x2)  #(1,128,16,16,16)
+        x = self.layer3(x)  #(1,256,16,16,16)
+        x = self.layer4(x)  #(1,512,16,16,16)
+
+        x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
+        x = self.level1(x)
+        x = self.bn_1(x)
+        x = self.relu1(x)
+        x = x + x2
+
+        x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
+        x = self.level2(x)
+        x = self.bn_2(x)
+        x = self.relu2(x)
+        x = x + x1
+
+        x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
+        x = self.level3(x)
+        x = self.bn_3(x)
+        x = self.relu3(x)
+        x = self.final_conv(x)
+        # x = self.conv_seg(x)
+        x = torch.sigmoid(x)
+        return x
+
+def downsample_basic_block(x, planes, stride, no_cuda=False):
+    out = F.avg_pool3d(x, kernel_size=1, stride=stride)
+    zero_pads = torch.Tensor(
+        out.size(0), planes - out.size(1), out.size(2), out.size(3),
+        out.size(4)).zero_()
+    if not no_cuda:
+        if isinstance(out.data, torch.cuda.FloatTensor):
+            zero_pads = zero_pads.cuda()
+
+    out = Variable(torch.cat([out.data, zero_pads], dim=1))
+
+    return out
+
+
+class resnet101(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(resnet101, self).__init__()
+
+    def forward(self, **kwargs):
+        model = ResNet(MedicaNetBottleneck, [3, 4, 23, 3], **kwargs)
+        return model
+
+def resnet10(**kwargs):
+    """Constructs a ResNet-18 model.
+    """
+    model = ResNet(MedicaNetBasicBlock, [1, 1, 1, 1], **kwargs)
+    return model
+
+
+def resnet18(**kwargs):
+    """Constructs a ResNet-18 model.
+    """
+    model = ResNet(MedicaNetBasicBlock, [2, 2, 2, 2], **kwargs)
+    return model
+
+
+def resnet34(**kwargs):
+    """Constructs a ResNet-34 model.
+    """
+    model = ResNet(MedicaNetBasicBlock, [3, 4, 6, 3], **kwargs)
+    return model
+
+
+def resnet50(**kwargs):
+    """Constructs a ResNet-50 model.
+    """
+    model = ResNet(MedicaNetBottleneck, [3, 4, 6, 3], **kwargs)
+    return model
+
+
+# def resnet101(**kwargs):
+#     """Constructs a ResNet-101 model.
+#     """
+#     model = ResNet(MedicaNetBottleneck, [3, 4, 23, 3], **kwargs)
+#     return model
+
+
+def resnet152(**kwargs):
+    """Constructs a ResNet-101 model.
+    """
+    model = ResNet(MedicaNetBottleneck, [3, 8, 36, 3], **kwargs)
+    return model
+
+
+def resnet200(**kwargs):
+    """Constructs a ResNet-101 model.
+    """
+    model = ResNet(MedicaNetBottleneck, [3, 24, 36, 3], **kwargs)
+    return model

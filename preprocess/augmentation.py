@@ -9,7 +9,8 @@ from matplotlib import pyplot as plt
 import time
 
 
-def augment3DImage(img, lbl, defaultLabelValues, nnAug, do_rotate=True, rotDegrees=20, do_scale=True, scaleFactor=1.1, do_flip=True, do_elasticAug=True, sigma=10, do_intensityShift=True, maxIntensityShift=0.1):
+def augment3DImage(img, lbl, defaultLabelValues, nnAug, do_rotate=True, rotDegrees=20, do_scale=True, scaleFactor=1.1,
+                   do_flip=True, do_elasticAug=True, sigma=10, do_intensityShift=True, maxIntensityShift=0.1):
     '''
     Function for augmentation of a 3D image. It will transform the image and corresponding labels
     by a number of optional transformations.
@@ -23,85 +24,139 @@ def augment3DImage(img, lbl, defaultLabelValues, nnAug, do_rotate=True, rotDegre
     '''
 
     startTime = time.time()
-    xSize = img.shape[0]
-    ySize = img.shape[1]
-    zSize = img.shape[2]
-    defaultPerChannel = img[0, 0, 0, :]
+    if type(img) == list:
+        xSize = img[0].shape[0]
+        ySize = img[0].shape[1]
+        zSize = img[0].shape[2]
+        defaultPerChannel = img[0][0, 0, 0, :]
 
-    if nnAug:
-        interpolationMethod = cv2.INTER_NEAREST
+        if nnAug:
+            interpolationMethod = cv2.INTER_NEAREST
+        else:
+            interpolationMethod = cv2.INTER_LINEAR
+
+        if do_rotate:
+            random_angle = np.random.uniform(-rotDegrees, rotDegrees)
+            for z in range(zSize):
+                img[0][:, :, z, :] = utils.rotate_image(img[0][:, :, z, :], random_angle)
+                img[1][:, :, z, :] = utils.rotate_image(img[1][:, :, z, :], random_angle)
+                lbl[0][:, :, z, :] = utils.rotate_image(lbl[0][:, :, z, :], random_angle, interpolationMethod)
+                lbl[1][:, :, z, :] = utils.rotate_image(lbl[1][:, :, z, :], random_angle, interpolationMethod)
+
+        # RANDOM SCALE
+        if do_scale:
+            scale = np.random.uniform(1 / scaleFactor, 1 * scaleFactor)
+            for z in range(zSize):
+                scaledSize = [round(xSize*scale), round(ySize*scale)]
+                imgScaled = utils.resize_image(img[0][:, :, z, :], scaledSize)
+                lblScaled = utils.resize_image(lbl[0][:, :, z, :], scaledSize, interpolationMethod)
+                if scale < 1:
+                    img[0][:,:, z,:] = padToSize(imgScaled, [xSize, ySize], defaultPerChannel)
+                    lbl[0][:, :, z, :] = padToSize(lblScaled, [xSize, ySize], defaultLabelValues)
+                    img[1][:, :, z, :] = padToSize(imgScaled, [xSize, ySize], defaultPerChannel)
+                    lbl[1][:, :, z, :] = padToSize(lblScaled, [xSize, ySize], defaultLabelValues)
+                else:
+                    img[0][:,:, z,:] = cropToSize(imgScaled, [xSize, ySize])
+                    lbl[0][:, :, z, :] = cropToSize(lblScaled, [xSize, ySize])
+                    img[1][:, :, z, :] = cropToSize(imgScaled, [xSize, ySize])
+                    lbl[1][:, :, z, :] = cropToSize(lblScaled, [xSize, ySize])
+
+        # RANDOM ELASTIC DEFOMRATIONS (like in U-NET)
+        if do_elasticAug:
+
+            mu = 0
+
+            dx = np.random.normal(mu, sigma, 9)
+            dx_mat = np.reshape(dx, (3, 3))
+            dx_img = utils.resize_image(dx_mat, (xSize, ySize), interp=cv2.INTER_CUBIC)
+
+            dy = np.random.normal(mu, sigma, 9)
+            dy_mat = np.reshape(dy, (3, 3))
+            dy_img = utils.resize_image(dy_mat, (xSize, ySize), interp=cv2.INTER_CUBIC)
+
+            for z in range(zSize):
+                img[0][:, :, z, :] = utils.dense_image_warp(img[0][:, :, z, :], dx_img, dy_img)
+                lbl[0][:, :, z, :] = utils.dense_image_warp(lbl[0][:, :, z, :], dx_img, dy_img, interpolationMethod)
+                img[1][:, :, z, :] = utils.dense_image_warp(img[1][:, :, z, :], dx_img, dy_img)
+                lbl[1][:, :, z, :] = utils.dense_image_warp(lbl[1][:, :, z, :], dx_img, dy_img, interpolationMethod)
+
+        # RANDOM INTENSITY SHIFT
+        if do_intensityShift:
+            for i in range(4):  # number of channels
+                img[0][:, :, :, i] = img[0][:, :, :, i] + np.random.uniform(-maxIntensityShift, maxIntensityShift) #assumes unit std derivation
+                img[1][:, :, :, i] = img[1][:, :, :, i] + np.random.uniform(-maxIntensityShift, maxIntensityShift)
+        # RANDOM FLIP
+        if do_flip:
+            for i in range(3):
+                if np.random.random() < 0.5:
+                    img[0] = np.flip(img[0], axis=i)
+                    lbl[0] = np.flip(lbl[0], axis=i)
+                    img[1] = np.flip(img[1], axis=i)
+                    lbl[1] = np.flip(lbl[1], axis=i)
+
+        return img[0].copy(), lbl[0].copy(), img[1].copy(), lbl[1].copy()
+        # pytorch cannot handle negative stride in view
     else:
-        interpolationMethod = cv2.INTER_LINEAR
+        xSize = img.shape[0]
+        ySize = img.shape[1]
+        zSize = img.shape[2]
+        defaultPerChannel = img[0, 0, 0, :]
 
-    #visualize augmentation
-    # halfOffset = zSize // 6
-    # sliceIndices = [halfOffset, 3*halfOffset, 5*halfOffset]
-    # for i in range(len(sliceIndices)):
-    #     visualizeSlice(img[:, :, sliceIndices[i], 0])
-    #     visualizeSlice(lbl[:, :, sliceIndices[i], 0])
+        if nnAug:
+            interpolationMethod = cv2.INTER_NEAREST
+        else:
+            interpolationMethod = cv2.INTER_LINEAR
 
-    # ROTATE
-    if do_rotate:
-        random_angle = np.random.uniform(-rotDegrees, rotDegrees)
-        for z in range(zSize):
-            img[:, :, z, :] = utils.rotate_image(img[:, :, z, :], random_angle)
-            lbl[:, :, z, :] = utils.rotate_image(lbl[:, :, z, :], random_angle, interpolationMethod)
+        if do_rotate:
+            random_angle = np.random.uniform(-rotDegrees, rotDegrees)
+            for z in range(zSize):
+                img[:, :, z, :] = utils.rotate_image(img[:, :, z, :], random_angle)
+                lbl[:, :, z, :] = utils.rotate_image(lbl[:, :, z, :], random_angle, interpolationMethod)
 
-    # RANDOM SCALE
-    if do_scale:
-        scale = np.random.uniform(1 / scaleFactor, 1 * scaleFactor)
-        for z in range(zSize):
-            scaledSize = [round(xSize*scale), round(ySize*scale)]
-            imgScaled = utils.resize_image(img[:, :, z, :], scaledSize)
-            lblScaled = utils.resize_image(lbl[:, :, z, :], scaledSize, interpolationMethod)
-            if scale < 1:
-                img[:,:, z,:] = padToSize(imgScaled, [xSize, ySize], defaultPerChannel)
-                lbl[:, :, z, :] = padToSize(lblScaled, [xSize, ySize], defaultLabelValues)
-            else:
-                img[:,:, z,:] = cropToSize(imgScaled, [xSize, ySize])
-                lbl[:, :, z, :] = cropToSize(lblScaled, [xSize, ySize])
+        # RANDOM SCALE
+        if do_scale:
+            scale = np.random.uniform(1 / scaleFactor, 1 * scaleFactor)
+            for z in range(zSize):
+                scaledSize = [round(xSize*scale), round(ySize*scale)]
+                imgScaled = utils.resize_image(img[:, :, z, :], scaledSize)
+                lblScaled = utils.resize_image(lbl[:, :, z, :], scaledSize, interpolationMethod)
+                if scale < 1:
+                    img[:,:, z,:] = padToSize(imgScaled, [xSize, ySize], defaultPerChannel)
+                    lbl[:, :, z, :] = padToSize(lblScaled, [xSize, ySize], defaultLabelValues)
+                else:
+                    img[:,:, z,:] = cropToSize(imgScaled, [xSize, ySize])
+                    lbl[:, :, z, :] = cropToSize(lblScaled, [xSize, ySize])
 
-    # RANDOM ELASTIC DEFOMRATIONS (like in U-NET)
-    if do_elasticAug:
+        # RANDOM ELASTIC DEFOMRATIONS (like in U-NET)
+        if do_elasticAug:
 
-        mu = 0
+            mu = 0
 
-        dx = np.random.normal(mu, sigma, 9)
-        dx_mat = np.reshape(dx, (3, 3))
-        dx_img = utils.resize_image(dx_mat, (xSize, ySize), interp=cv2.INTER_CUBIC)
+            dx = np.random.normal(mu, sigma, 9)
+            dx_mat = np.reshape(dx, (3, 3))
+            dx_img = utils.resize_image(dx_mat, (xSize, ySize), interp=cv2.INTER_CUBIC)
 
-        dy = np.random.normal(mu, sigma, 9)
-        dy_mat = np.reshape(dy, (3, 3))
-        dy_img = utils.resize_image(dy_mat, (xSize, ySize), interp=cv2.INTER_CUBIC)
+            dy = np.random.normal(mu, sigma, 9)
+            dy_mat = np.reshape(dy, (3, 3))
+            dy_img = utils.resize_image(dy_mat, (xSize, ySize), interp=cv2.INTER_CUBIC)
 
-        for z in range(zSize):
-            img[:, :, z, :] = utils.dense_image_warp(img[:, :, z, :], dx_img, dy_img)
-            lbl[:, :, z, :] = utils.dense_image_warp(lbl[:, :, z, :], dx_img, dy_img, interpolationMethod)
+            for z in range(zSize):
+                img[:, :, z, :] = utils.dense_image_warp(img[:, :, z, :], dx_img, dy_img)
+                lbl[:, :, z, :] = utils.dense_image_warp(lbl[:, :, z, :], dx_img, dy_img, interpolationMethod)
 
-    # RANDOM INTENSITY SHIFT
-    if do_intensityShift:
-        for i in range(4):  # number of channels
-            img[:, :, :, i] = img[:, :, :, i] + np.random.uniform(-maxIntensityShift, maxIntensityShift) #assumes unit std derivation
+        # RANDOM INTENSITY SHIFT
+        if do_intensityShift:
+            for i in range(4):  # number of channels
+                img[:, :, :, i] = img[:, :, :, i] + np.random.uniform(-maxIntensityShift, maxIntensityShift) #assumes unit std derivation
 
-    # RANDOM FLIP
-    if do_flip:
-        for i in range(3):
-            if np.random.random() < 0.5:
-                img = np.flip(img, axis=i)
-                lbl = np.flip(lbl, axis=i)
+        # RANDOM FLIP
+        if do_flip:
+            for i in range(3):
+                if np.random.random() < 0.5:
+                    img = np.flip(img, axis=i)
+                    lbl = np.flip(lbl, axis=i)
 
-
-    #log augmentation time
-    #print("Augmentation took {}s".format(time.time() - startTime))
-
-    #visualize augmentation
-    # halfOffset = zSize // 6
-    # sliceIndices = [halfOffset, 3*halfOffset, 5*halfOffset]
-    # for i in range(len(sliceIndices)):
-    #     visualizeSlice(img[:, :, sliceIndices[i], 0])
-    #     visualizeSlice(lbl[:, :, sliceIndices[i], 4])
-
-    return img.copy(), lbl.copy() #pytorch cannot handle negative stride in view
+        return img.copy(), lbl.copy()  # pytorch cannot handle negative stride in view
 
 
 def visualizeSlice(slice):

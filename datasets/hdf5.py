@@ -11,7 +11,6 @@ from torch.utils.data import Dataset, DataLoader, ConcatDataset
 import augment.transforms as transforms
 import BraTS
 from unet3d.utils import get_logger
-from preprocess.partitions import load_tfrecord_datasets, get_all_partition_ids
 from unet3d.losses import expand_as_one_hot
 import preprocess.augmentation as aug
 
@@ -113,147 +112,9 @@ class FilterSliceBuilder(SliceBuilder):
         self._label_slices = list(label_slices)
 
 
-class BraTSDataset(Dataset):
-    """
-    Implementation of torch.utils.data.Dataset backed by the BRATS files, which iterates over the raw and label
-    """
-    def __init__(self, loader, patient_ids, transformer_config, phase, is_mixup):
-
-        self.transformer = transforms.get_transformer(transformer_config, mean=0.5, std=0.5, phase=phase)
-
-        if phase != 'test':
-            # create label/weight transform only in train/val phase
-            self.label_transform = self.transformer.label_transform()
-        else:
-            # 'test' phase used only for predictions so ignore the label dataset
-            self.labels = None
-            self.weight_maps = None
-
-        self.raw_transform = self.transformer.raw_transform()
-
-        self.loader = loader
-        self.train_datasets = self.build_dataset_list(patient_ids)
-        self.count = len(self.train_datasets)
-        self.is_mixup = is_mixup
-
-    def __getitem__(self, index):
-        if index >= len(self):
-            raise StopIteration
-        if self.is_mixup:
-            idx = random.randint(0, len(self.train_datasets)-1)
-            patient1 = self.loader.patient(self.train_datasets[index])
-            patient2 = self.loader.patient(self.train_datasets[idx])
-            images1 = self.mri_preprocessing(patient1.mri)
-            images2 = self.mri_preprocessing(patient2.mri)
-
-            labels1 = self.seg_preprocessing(patient1.seg)
-            labels2 = self.seg_preprocessing(patient2.seg)
-            alpha = 1.0  # 超参数
-            lam = np.random.beta(alpha, alpha)
-            images = lam * images1 + (1 - lam) * images2
-            label_transformed = lam * labels1 + (1 - lam) * labels2
-            # print("eq sum target", target.eq(labels1.data).cpu().sum())
-            print(f'Using mixup Patient id is:{self.train_datasets[index], self.train_datasets[idx]}')
-        else:
-            patient = self.loader.patient(self.train_datasets[index])
-            images = self.make_crop(patient.mri)
-            mri_transformed = self.mri_transform(images, self.raw_transform)
-
-            # transforms the mri to range of -1~1
-            image_max = mri_transformed.max()
-            self.transforms = transforms.Compose(
-                [
-                 transforms.RangeNormalize(max_value=image_max),
-                 transforms.Normalize(std=0.5, mean=0.5)])
-            images = self.transforms(mri_transformed)
-
-            # print(self.train_datasets[index])
-            label_transformed = self.seg_preprocessing(patient.seg)
-            # label_transformed = self.mri_transform(labels, self.label_transform)
-        return images, label_transformed
-
-    def mri_preprocessing(self, data):
-        _image = self.make_crop(data)
-        _image_max = np.max(_image)
-        transform = transforms.Compose(
-            [transforms.ToTensor(expand_dims=True),
-             transforms.RangeNormalize(max_value=_image_max),
-             transforms.Normalize(std=0.5, mean=0.5)])
-        images = transform(_image).unsqueeze(0)
-        return images[0, ...]
-
-    def seg_preprocessing(self, seg):
-        _label = self.make_crop(seg)
-        _label = self._toEvaluationOneHot(_label)
-        _label = np.transpose(_label, (3, 0, 1, 2))
-        _label = torch.from_numpy(_label).unsqueeze(0)
-        return _label[0, ...]
-
-    @staticmethod
-    def mri_transform(data, transformer):
-        transformed_channels = []
-        # get the label data and apply the label transformer
-        for i in range(data.shape[0]):
-            m = data[i, :, :, :]
-            transformed_channel = transformer(m)
-            transformed_channels.append(transformed_channel)
-
-        mri_transformed = transformed_channels[0]
-        for i in range(len(transformed_channels)-1):
-            mri_transformed = torch.cat((mri_transformed, transformed_channels[i+1]), 0)
-        return mri_transformed
-
-    @staticmethod
-    def seg_transform(data, transformer):
-        # get the label data and apply the label transformer
-        transformed_channel = transformer(data)
-        return transformed_channel
-
-    def __len__(self):
-        return self.count
-
-    @staticmethod
-    def build_dataset_list(patient_ids):
-        train_datasets = []
-        for patient in patient_ids:
-            train_datasets.append(patient)
-        return train_datasets
-
-    @staticmethod
-    def make_one_hot(input):
-        seg = np.eye(5)[input].transpose(3, 0, 1, 2)
-        seg = seg[[0, 1, 2, 4], :, :, :]
-        return seg
-
-    @staticmethod
-    def _toEvaluationOneHot(labels):
-        shape = labels.shape
-        out = np.zeros([shape[0], shape[1], shape[2], 3], dtype=np.float32)
-        out[:, :, :, 0] = (labels != 0)
-        out[:, :, :, 1] = (labels != 0) * (labels != 2)
-        out[:, :, :, 2] = (labels == 4)
-        return out
-
-    @staticmethod
-    def make_crop(input):
-        image = input[..., 40:200, 40:200, 13:141]
-        # image = input[..., 72:200, 72:200, 13:141]
-        return image
-
-    @staticmethod
-    def _calculate_mean_std(input):
-        """
-        Compute a mean/std of the raw stack for normalization.
-        This is an in-memory implementation, override this method
-        with the chunk-based computation if you're working with huge H5 files.
-        :return: a tuple of (mean, std) of the raw data
-        """
-        return input.mean(keepdims=True), input.std(keepdims=True)
-
-
 class BratsDataset(torch.utils.data.Dataset):
     #mode must be trian, test or val
-    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False):
+    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False, doMixUp=True):
         super(BratsDataset, self).__init__()
         self.filePath = filePath
         self.mode = mode
@@ -262,6 +123,7 @@ class BratsDataset(torch.utils.data.Dataset):
         self.randomCrop = randomCrop
         self.hasMasks = hasMasks
         self.returnOffsets = returnOffsets
+        self.doMixUp = doMixUp
 
         #augmentation settings
         self.nnAugmentation = True
@@ -298,6 +160,65 @@ class BratsDataset(torch.utils.data.Dataset):
                 labels = np.expand_dims(labels, 3)
             defaultLabelValues = np.asarray([0], dtype=np.float32)
 
+        if self.nnAugmentation:
+            if self.hasMasks: labels = self._toEvaluationOneHot(np.squeeze(labels, 3))
+        else:
+            if self.mode == "train" and not self.softAugmentation and not self.trainOriginalClasses and self.hasMasks:
+                labels = self._toOrdinal(labels)
+                labels = self._toEvaluationOneHot(labels)
+
+        if self.mode == 'train' and self.doMixUp:
+            datasize = self.file["images_" + self.mode].shape[0]
+            idx = np.random.randint(0, datasize)
+            image2 = self.file["images_" + self.mode][idx, ...]
+            labels2 = self.file["masks_" + self.mode][idx, ...]
+
+            # Prepare data depeinding on soft/hard augmentation scheme
+            if not self.nnAugmentation:
+                if not self.trainOriginalClasses and (self.mode != "train" or self.softAugmentation):
+                    if self.hasMasks: labels2 = self._toEvaluationOneHot(labels2)
+                    defaultLabelValues = np.zeros(3, dtype=np.float32)
+                else:
+                    if self.hasMasks: labels2 = self._toOrignalCategoryOneHot(labels2)
+                    defaultLabelValues = np.asarray([1, 0, 0, 0, 0], dtype=np.float32)
+            elif self.hasMasks:
+                if labels2.ndim < 4:
+                    labels2 = np.expand_dims(labels2, 3)
+                defaultLabelValues = np.asarray([0], dtype=np.float32)
+
+            if self.nnAugmentation:
+                if self.hasMasks: labels2 = self._toEvaluationOneHot(np.squeeze(labels2, 3))
+            else:
+                if self.mode == "train" and not self.softAugmentation and not self.trainOriginalClasses and self.hasMasks:
+                    labels2 = self._toOrdinal(labels2)
+                    labels2 = self._toEvaluationOneHot(labels2)
+
+            m1 = 0.3
+            m2 = 0.2
+            m3 = 0.1
+            alpha = 1.0
+            lam = np.random.beta(alpha, alpha)
+            image = lam * image + (1 - lam) * image2
+
+            target = np.zeros_like(labels)
+            if lam > m1:
+                target[..., 0] = target[..., 0] + labels[..., 0]
+            if (1 - lam) > m1:
+                target[..., 0] = target[..., 0] + labels2[..., 0]
+
+            if lam > m2:
+                target[..., 1] = target[..., 1] + labels[..., 1]
+            if (1 - lam) > m2:
+                target[..., 1] = target[..., 1] + labels2[..., 1]
+
+            if lam > m3:
+                target[..., 2] = target[..., 2] + labels[..., 2]
+            if (1 - lam) > m3:
+                target[..., 2] = target[..., 2] + labels2[..., 2]
+
+            target[target > 1] = 1
+            labels = target
+
         #augment data
         if self.mode == "train":
             image, labels = aug.augment3DImage(image,
@@ -313,13 +234,6 @@ class BratsDataset(torch.utils.data.Dataset):
                                                self.sigma,
                                                self.doIntensityShift,
                                                self.maxIntensityShift)
-
-        if self.nnAugmentation:
-            if self.hasMasks: labels = self._toEvaluationOneHot(np.squeeze(labels, 3))
-        else:
-            if self.mode == "train" and not self.softAugmentation and not self.trainOriginalClasses and self.hasMasks:
-                labels = self._toOrdinal(labels)
-                labels = self._toEvaluationOneHot(labels)
 
         # random crop
         if not self.randomCrop is None:
@@ -565,7 +479,6 @@ def get_brats_train_loaders(config):
     train_path = loaders_config['train_path']
     val_path = loaders_config['val_path']
 
-    train_ids, test_ids, validation_ids = get_all_partition_ids()
     # loss_file_num = 0
     # for i in train_ids:
     #     name = i + ".tfrecord.gzip"
@@ -579,14 +492,14 @@ def get_brats_train_loaders(config):
     # train_datasets = BraTSDataset(brats, train_ids, phase='train',
     #                               transformer_config=loaders_config['transformer'],
     #                               is_mixup=loaders_config['mixup'])
-    train_datasets = BratsDataset(train_path[0], randomCrop=[128,128,128])
+    train_datasets = BratsDataset(train_path[0], randomCrop=[128, 128, 128], doMixUp=loaders_config['mixup'])
 
     logger.info(f'Loading validation set from: {val_path}...')
     # brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train
     # val_datasets = BraTSDataset(brats, validation_ids, phase='val',
     #                             transformer_config=loaders_config['transformer'],
     #                             is_mixup=False)
-    val_datasets = BratsDataset(val_path[0], randomCrop=[128, 128, 128])
+    val_datasets = BratsDataset(val_path[0], mode='validation')
 
     num_workers = loaders_config.get('num_workers', 1)
     logger.info(f'Number of workers for train/val datasets: {num_workers}')

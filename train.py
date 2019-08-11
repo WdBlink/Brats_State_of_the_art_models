@@ -15,6 +15,9 @@ from unet3d.trainer import UNet3DTrainer
 from unet3d.utils import get_logger
 from unet3d.utils import get_number_of_learnable_parameters
 
+from MedicalNet.model import generate_model
+from MedicalNet import config as MedConfig
+
 
 def _create_trainer(config, model, optimizer, lr_scheduler, loss_criterion, eval_criterion, loaders, logger):
     assert 'trainer' in config, 'Could not find trainer configuration'
@@ -85,7 +88,7 @@ def _create_lr_scheduler(config, optimizer):
 
 def main():
     # Create main logger
-    logger = get_logger('NoNewNetTrainer')
+    logger = get_logger('UNet3DTrainer')
 
     # Load and log experiment configuration
     config = load_config()
@@ -101,6 +104,8 @@ def main():
 
     # Create the model
     model = get_model(config)
+    # model, parameters = generate_model(MedConfig)
+
     # put the model on GPUs
     logger.info(f"Sending the model to '{config['device']}'")
     model = model.to(config['device'])
@@ -119,8 +124,8 @@ def main():
     optimizer = _create_optimizer(config, model)
 
     # Create learning rate adjustment strategy
-    # lr_scheduler = _create_lr_scheduler(config, optimizer)
-    lr_scheduler = None
+    lr_scheduler = _create_lr_scheduler(config, optimizer)
+
     # Create model trainer
     trainer = _create_trainer(config, model=model, optimizer=optimizer, lr_scheduler=lr_scheduler,
                               loss_criterion=loss_criterion, eval_criterion=eval_criterion, loaders=loaders,

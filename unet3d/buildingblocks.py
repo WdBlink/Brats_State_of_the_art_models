@@ -4,6 +4,7 @@ from torch.nn import functional as F
 from unet3d.config import load_config
 from torch.nn import init
 
+
 # initalize the module
 def init_weights(net, init_type='normal'):
     # print('initialization method [%s]' % init_type)
@@ -373,24 +374,22 @@ class GreenBlock(nn.Module):
     def __init__(self, input_channels, output_channels):
         super(GreenBlock, self).__init__()
         self.conv3d_1 = conv3d(input_channels, output_channels, padding=0, kernel_size=1, bias=True)
-        # nn.Conv3d(input_channels, )
-        # self.GN = torch.nn.GroupNorm(num_groups=4, num_channels=output_channels)
-        self.BN_1 = nn.BatchNorm3d(output_channels)
+        self.gn1 = nn.GroupNorm(input_channels, input_channels)
         self.act_1 = nn.ReLU()
 
-        self.conv3d_2 = conv3d(output_channels, output_channels, kernel_size=3, bias=True)
-        self.BN_2 = nn.BatchNorm3d(output_channels)
+        self.conv3d_2 = conv3d(input_channels, output_channels, kernel_size=3, bias=True)
+        self.gn2 = nn.GroupNorm(output_channels, output_channels)
         self.act_2 = nn.ReLU()
 
         self.conv3d_3 = conv3d(output_channels, output_channels, kernel_size=3, bias=True)
 
     def forward(self, x):
         inp_res = self.conv3d_1(x)
-        x = self.BN_1(x)
+        x = self.gn1(x)
         x = self.act_1(x)
 
         x = self.conv3d_2(x)
-        x = self.BN_2(x)
+        x = self.gn2(x)
         x = self.act_2(x)
 
         x = self.conv3d_3(x)
@@ -410,6 +409,7 @@ class DownBlock(nn.Module):
             'crg' -> conv + ReLU + groupnorm
         num_groups (int): number of groups for the GroupNorm
     """
+
     def __init__(self, input_channels, output_channels, order="cbr", num_groups=8):
         super(DownBlock, self).__init__()
         self.convblock1 = SingleConv(input_channels, output_channels, order=order, num_groups=num_groups)
@@ -436,6 +436,7 @@ class UpBlock(nn.Module):
                 'crg' -> conv + ReLU + groupnorm
             num_groups (int): number of groups for the GroupNorm
         """
+
     def __init__(self, input_channels, output_channels):
         super(UpBlock, self).__init__()
         self.input_channels = input_channels
@@ -444,10 +445,10 @@ class UpBlock(nn.Module):
 
     def forward(self, x):
         _, c, w, h, d = x.size()
-        upsample1 = F.upsample(x, [2*w, 2*h, 2*d], mode='trilinear')
+        upsample1 = F.upsample(x, [2 * w, 2 * h, 2 * d], mode='trilinear')
         upsample = self.conv1(upsample1)
         return upsample
-    
+
 
 class unetConv3(nn.Module):
 
@@ -456,17 +457,17 @@ class unetConv3(nn.Module):
         self.n = n
 
         if is_batchnorm:
-            for i in range(1, n+1):
+            for i in range(1, n + 1):
                 conv = nn.Sequential(nn.Conv3d(in_size, out_size, ks, stride, padding),
                                      nn.BatchNorm3d(out_size),
                                      nn.ReLU(inplace=True))
-                setattr(self, 'conv%d'%i, conv)
+                setattr(self, 'conv%d' % i, conv)
                 in_size = out_size
         else:
-            for i in range(1, n+1):
+            for i in range(1, n + 1):
                 conv = nn.Sequential(nn.Conv3d(in_size, out_size, ks, stride, padding),
                                      nn.ReLU(inplace=True))
-                setattr(self, 'conv%d'%i, conv)
+                setattr(self, 'conv%d' % i, conv)
                 in_size = out_size
 
         for m in self.children():
@@ -474,8 +475,8 @@ class unetConv3(nn.Module):
 
     def forward(self, input):
         x = input
-        for i in range(1, self.n+1):
-            conv = getattr(self, 'conv%d'%i)
+        for i in range(1, self.n + 1):
+            conv = getattr(self, 'conv%d' % i)
             x = conv(x)
 
         return x
@@ -485,7 +486,7 @@ class unetUp(nn.Module):
 
     def __init__(self, in_size, out_size, is_deconv=False, n_concat=2):
         super(unetUp, self).__init__()
-        self.conv = unetConv3(in_size+(n_concat-2)*out_size, out_size, is_batchnorm=False)
+        self.conv = unetConv3(in_size + (n_concat - 2) * out_size, out_size, is_batchnorm=False)
         if is_deconv:
             self.up = nn.ConvTranspose3d(in_size, out_size, kernel_size=2, stride=2, padding=0)
         else:
@@ -495,7 +496,7 @@ class unetUp(nn.Module):
             )
 
         for m in self.children():
-            if m.__class__.__name__.find('unetConv3') != -1:continue
+            if m.__class__.__name__.find('unetConv3') != -1: continue
             init_weights(m, init_type='kaiming')
 
     def forward(self, high_feature, *low_feature):
@@ -503,75 +504,6 @@ class unetUp(nn.Module):
         for feature in low_feature:
             outputs0 = torch.cat([outputs0, feature], 1)
         return self.conv(outputs0)
-
-
-class VaeBlock(nn.Module):
-    """
-        A module that carry out vae regularization
-        Args:
-            in_channels (int): number of input channels
-            out_channels (int): number of output channels
-            kernel_size (int): size of the convolving kernel
-            order (string): determines the order of layers, e.g.
-                'cr' -> conv + ReLU
-                'crg' -> conv + ReLU + groupnorm
-            num_groups (int): number of groups for the GroupNorm
-        """
-    def __init__(self, input_channels, output_channels, order="cbr", num_groups=8):
-        super(VaeBlock, self).__init__()
-        self.conv_block = SingleConv(input_channels, 1, order=order, num_groups=num_groups)
-        self.fcn = nn.Linear(9600, 128)
-        self.fcn1 = nn.Linear(128, 64)
-        self.fcn2 = nn.Linear(128, 64)
-        self.fcn3 = nn.Linear(128, 9600)
-        self.conv1 = conv3d(1, 128, kernel_size=1, bias=True, padding=0)
-        # self.greenblock = GreenBlock(128, 128)
-        self.conv2 = conv3d(128, 64, kernel_size=1, bias=True, padding=0)
-        # self.greenblock1 = GreenBlock(64, 64)
-        self.conv3 = conv3d(64, 32, kernel_size=1, bias=True, padding=0)
-        # self.greenblock2 = GreenBlock(32, 32)
-        self.conv4 = conv3d(32, output_channels, kernel_size=1, bias=True, padding=0)
-
-    def forward(self, x):
-        x = self.conv_block(x)
-        x = torch.flatten(x)
-        x = self.fcn(x)
-        z_mean = self.fcn1(x)
-        z_var = self.fcn2(x)
-        x = self.sampling([z_mean, z_var])
-        x = torch.reshape(x, (-1, 128))
-
-        x = self.fcn3(x)
-        x = torch.reshape(x, (-1, 1, 20, 24, 20))
-        x = self.conv1(x)
-        x = F.upsample(x, size=[2*x.size(2), 2*x.size(3), 2*x.size(4)], mode='trilinear')
-        # x = self.greenblock(x)
-
-        x = self.conv2(x)
-        x = F.upsample(x, size=[2*x.size(2), 2*x.size(3), 2*x.size(4)], mode='trilinear')
-        # x = self.greenblock1(x)
-
-        x = self.conv3(x)
-        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
-        # x = self.greenblock2(x)
-
-        x = self.conv4(x)
-
-        return x, z_mean, z_var
-
-    def sampling(self, args):
-        """Reparameterization trick by sampling from an isotropic unit Gaussian.
-        # Arguments
-            args (tensor): mean and log of variance of Q(z|X)
-        # Returns
-            z (tensor): sampled latent vector
-        """
-        config = load_config()
-        z_mean, z_var = args
-        batch = 2
-        dim = z_mean.size(0)
-        epsilon = torch.randn([batch, dim]).to(config['device'])
-        return z_mean + torch.exp(0.5 * z_var) * epsilon
 
 
 class EncoderModule(nn.Module):
@@ -600,6 +532,7 @@ class EncoderModule(nn.Module):
             x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=True)
         return x
 
+
 class DecoderModule(nn.Module):
     def __init__(self, inChannels, outChannels, upsample=False, firstConv=True):
         super(DecoderModule, self).__init__()
@@ -619,3 +552,502 @@ class DecoderModule(nn.Module):
         if self.upsample:
             x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
         return x
+
+
+class VaeBlock(nn.Module):
+    """
+        A module that carry out vae regularization
+        Args:
+            in_channels (int): number of input channels
+            out_channels (int): number of output channels
+            kernel_size (int): size of the convolving kernel
+            order (string): determines the order of layers, e.g.
+                'cr' -> conv + ReLU
+                'crg' -> conv + ReLU + groupnorm
+            num_groups (int): number of groups for the GroupNorm
+        """
+
+    def __init__(self, input_channels, output_channels, order="cbr", num_groups=8):
+        super(VaeBlock, self).__init__()
+        self.conv_block = SingleConv(input_channels, 1, order=order, num_groups=num_groups)
+        self.fcn = nn.Linear(512, 128)
+        self.fcn1 = nn.Linear(128, 64)
+        self.fcn2 = nn.Linear(128, 64)
+        self.fcn3 = nn.Linear(128, 4096)
+        self.conv1 = conv3d(1, 128, kernel_size=1, bias=True, padding=0)
+        # self.greenblock = GreenBlock(128, 128)
+        self.conv2 = conv3d(128, 64, kernel_size=1, bias=True, padding=0)
+        # self.greenblock1 = GreenBlock(64, 64)
+        self.conv3 = conv3d(64, 32, kernel_size=1, bias=True, padding=0)
+        # self.greenblock2 = GreenBlock(32, 32)
+        self.conv4 = conv3d(32, output_channels, kernel_size=1, bias=True, padding=0)
+
+    def forward(self, x):
+        x = self.conv_block(x)
+        x = torch.flatten(x)
+        x = self.fcn(x)
+        z_mean = self.fcn1(x)
+        z_var = self.fcn2(x)
+        x = self.sampling([z_mean, z_var])
+        x = torch.reshape(x, (-1, 128))
+
+        x = self.fcn3(x)
+        x = torch.reshape(x, (-1, 1, 16, 16, 16))
+        x = self.conv1(x)
+        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
+        # x = self.greenblock(x)
+
+        x = self.conv2(x)
+        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
+        # x = self.greenblock1(x)
+
+        x = self.conv3(x)
+        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
+        # x = self.greenblock2(x)
+
+        x = self.conv4(x)
+
+        return x, z_mean, z_var
+
+    def sampling(self, args):
+        """Reparameterization trick by sampling from an isotropic unit Gaussian.
+        # Arguments
+            args (tensor): mean and log of variance of Q(z|X)
+        # Returns
+            z (tensor): sampled latent vector
+        """
+        config = load_config()
+        z_mean, z_var = args
+        batch = 2
+        dim = z_mean.size(0)
+        epsilon = torch.randn([batch, dim]).to(config['device'])
+        return z_mean + torch.exp(0.5 * z_var) * epsilon
+
+
+class CaeBlock(nn.Module):
+    """
+        A module that carry out CAE regularization
+        Args:
+            in_channels (int): number of input channels
+            out_channels (int): number of output channels
+            kernel_size (int): size of the convolving kernel
+            order (string): determines the order of layers, e.g.
+                'cr' -> conv + ReLU
+                'crg' -> conv + ReLU + groupnorm
+            num_groups (int): number of groups for the GroupNorm
+        """
+
+    def __init__(self, input_channels, output_channels, order="cbr", num_groups=8):
+        super(CaeBlock, self).__init__()
+        self.conv_block = SingleConv(input_channels, 1, order=order, num_groups=num_groups)
+        self.conv1 = conv3d(1, 128, kernel_size=1, bias=True, padding=0)
+        self.greenblock = GreenBlock(128, 128)
+        self.conv2 = conv3d(128, 64, kernel_size=1, bias=True, padding=0)
+        self.greenblock1 = GreenBlock(64, 64)
+        self.conv3 = conv3d(64, 32, kernel_size=1, bias=True, padding=0)
+        self.greenblock2 = GreenBlock(32, 32)
+        self.conv4 = conv3d(32, 16, kernel_size=1, bias=True, padding=0)
+        self.greenblock3 = GreenBlock(16, 16)
+        self.conv5 = conv3d(16, output_channels, kernel_size=1, bias=True, padding=0)
+
+    def forward(self, x):
+        x = self.conv_block(x)
+        x = self.conv1(x)
+        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
+        x = self.greenblock(x)
+
+        x = self.conv2(x)
+        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
+        x = self.greenblock1(x)
+
+        x = self.conv3(x)
+        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
+        x = self.greenblock2(x)
+
+        x = self.conv4(x)
+        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
+        x = self.greenblock3(x)
+
+        x = self.conv5(x)
+        x = torch.sigmoid(x)
+        x = x * 2 - 1
+
+        return x
+
+
+class ResEncoderModule(nn.Module):
+    def __init__(self, inChannels, outChannels, maxpool=False, secondConv=True, hasDropout=False):
+        super(ResEncoderModule, self).__init__()
+        groups = min(outChannels, 30)
+        self.maxpool = maxpool
+        self.secondConv = secondConv
+        self.hasDropout = hasDropout
+
+        self.greenblock1 = GreenBlock(inChannels, outChannels)
+        self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
+
+        self.gn1 = nn.GroupNorm(groups, outChannels)
+        if secondConv:
+            self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
+            self.greenblock2 = GreenBlock(outChannels, outChannels)
+            self.gn2 = nn.GroupNorm(groups, outChannels)
+        if hasDropout:
+            self.dropout = nn.Dropout3d(0.2, True)
+
+        self.convpool = nn.Conv3d(inChannels, inChannels, kernel_size=3, stride=2, bias=False, padding=1)
+
+    def forward(self, x):
+        if self.maxpool:
+            # x = F.max_pool3d(x, 2)
+            x = self.convpool(x)
+        doInplace = True and not self.hasDropout
+        x = self.greenblock1(x)
+        if self.hasDropout:
+            x = self.dropout(x)
+        if self.secondConv:
+            x = self.greenblock2(x)
+        return x
+
+
+class ResDecoderModule(nn.Module):
+    def __init__(self, inChannels, outChannels, upsample=False, firstConv=True):
+        super(ResDecoderModule, self).__init__()
+        groups = min(outChannels, 30)
+        self.upsample = upsample
+        self.firstConv = firstConv
+        if firstConv:
+            self.conv1 = nn.Conv3d(inChannels, inChannels, 3, padding=1, bias=False)
+            self.greenblock1 = GreenBlock(inChannels, inChannels)
+            self.gn1 = nn.GroupNorm(groups, inChannels)
+        self.conv2 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
+        self.greenblock2 = GreenBlock(inChannels, outChannels)
+        self.gn2 = nn.GroupNorm(groups, outChannels)
+
+    def forward(self, x):
+        if self.firstConv:
+            x = self.greenblock1(x)
+        x = self.greenblock2(x)
+        if self.upsample:
+            x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
+        return x
+
+
+class UnetConv3(nn.Module):
+    def __init__(self, in_size, out_size, is_batchnorm, kernel_size=(3, 3, 1), padding_size=(1, 1, 0),
+                 init_stride=(1, 1, 1)):
+        super(UnetConv3, self).__init__()
+
+        if is_batchnorm:
+            self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, init_stride, padding_size),
+                                       nn.BatchNorm3d(out_size),
+                                       nn.ReLU(inplace=True), )
+            self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
+                                       nn.BatchNorm3d(out_size),
+                                       nn.ReLU(inplace=True), )
+        else:
+            self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, init_stride, padding_size),
+                                       nn.ReLU(inplace=True), )
+            self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
+                                       nn.ReLU(inplace=True), )
+
+        # initialise the blocks
+        for m in self.children():
+            init_weights(m, init_type='kaiming')
+
+    def forward(self, inputs):
+        outputs = self.conv1(inputs)
+        outputs = self.conv2(outputs)
+        return outputs
+
+
+class UnetUp3_CT(nn.Module):
+    def __init__(self, in_size, out_size, is_batchnorm=True):
+        super(UnetUp3_CT, self).__init__()
+        self.conv = UnetConv3(in_size + out_size, out_size, is_batchnorm, kernel_size=(3, 3, 3), padding_size=(1, 1, 1))
+        self.up = nn.Upsample(scale_factor=(2, 2, 2), mode='trilinear')
+
+        # initialise the blocks
+        for m in self.children():
+            if m.__class__.__name__.find('UnetConv3') != -1: continue
+            init_weights(m, init_type='kaiming')
+
+    def forward(self, inputs1, inputs2):
+        outputs2 = self.up(inputs2)
+        offset = outputs2.size()[2] - inputs1.size()[2]
+        padding = 2 * [offset // 2, offset // 2, 0]
+        outputs1 = F.pad(inputs1, padding)
+        return self.conv(torch.cat([outputs1, outputs2], 1))
+
+
+class UnetGridGatingSignal3(nn.Module):
+    def __init__(self, in_size, out_size, kernel_size=(1, 1, 1), is_batchnorm=True):
+        super(UnetGridGatingSignal3, self).__init__()
+
+        if is_batchnorm:
+            self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, (1, 1, 1), (0, 0, 0)),
+                                       nn.BatchNorm3d(out_size),
+                                       nn.ReLU(inplace=True),
+                                       )
+        else:
+            self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, (1, 1, 1), (0, 0, 0)),
+                                       nn.ReLU(inplace=True),
+                                       )
+
+        # initialise the blocks
+        for m in self.children():
+            init_weights(m, init_type='kaiming')
+
+    def forward(self, inputs):
+        outputs = self.conv1(inputs)
+        return outputs
+
+
+class UnetDsv3(nn.Module):
+    def __init__(self, in_size, out_size, scale_factor):
+        super(UnetDsv3, self).__init__()
+        self.dsv = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size=1, stride=1, padding=0),
+                                 nn.Upsample(scale_factor=scale_factor, mode='trilinear'), )
+
+    def forward(self, input):
+        return self.dsv(input)
+
+
+class GridAttentionBlockND(nn.Module):
+    def __init__(self, in_channels, gating_channels, inter_channels=None, dimension=3, mode='concatenation',
+                 sub_sample_factor=(2, 2, 2)):
+        super(GridAttentionBlockND, self).__init__()
+
+        assert dimension in [2, 3]
+        assert mode in ['concatenation', 'concatenation_debug', 'concatenation_residual']
+
+        # Downsampling rate for the input featuremap
+        if isinstance(sub_sample_factor, tuple):
+            self.sub_sample_factor = sub_sample_factor
+        elif isinstance(sub_sample_factor, list):
+            self.sub_sample_factor = tuple(sub_sample_factor)
+        else:
+            self.sub_sample_factor = tuple([sub_sample_factor]) * dimension
+
+        # Default parameter set
+        self.mode = mode
+        self.dimension = dimension
+        self.sub_sample_kernel_size = self.sub_sample_factor
+
+        # Number of channels (pixel dimensions)
+        self.in_channels = in_channels
+        self.gating_channels = gating_channels
+        self.inter_channels = inter_channels
+
+        if self.inter_channels is None:
+            self.inter_channels = in_channels // 2
+            if self.inter_channels == 0:
+                self.inter_channels = 1
+
+        if dimension == 3:
+            conv_nd = nn.Conv3d
+            bn = nn.BatchNorm3d
+            self.upsample_mode = 'trilinear'
+        elif dimension == 2:
+            conv_nd = nn.Conv2d
+            bn = nn.BatchNorm2d
+            self.upsample_mode = 'bilinear'
+        else:
+            raise NotImplemented
+
+        # Output transform
+        self.W = nn.Sequential(
+            conv_nd(in_channels=self.in_channels, out_channels=self.in_channels, kernel_size=1, stride=1, padding=0),
+            bn(self.in_channels),
+        )
+
+        # Theta^T * x_ij + Phi^T * gating_signal + bias
+        self.theta = conv_nd(in_channels=self.in_channels, out_channels=self.inter_channels,
+                             kernel_size=self.sub_sample_kernel_size, stride=self.sub_sample_factor, padding=0,
+                             bias=False)
+        self.phi = conv_nd(in_channels=self.gating_channels, out_channels=self.inter_channels,
+                           kernel_size=1, stride=1, padding=0, bias=True)
+        self.psi = conv_nd(in_channels=self.inter_channels, out_channels=1, kernel_size=1, stride=1, padding=0,
+                           bias=True)
+
+        # Initialise weights
+        for m in self.children():
+            init_weights(m, init_type='kaiming')
+
+        # Define the operation
+        if mode == 'concatenation':
+            self.operation_function = self._concatenation
+        elif mode == 'concatenation_debug':
+            self.operation_function = self._concatenation_debug
+        elif mode == 'concatenation_residual':
+            self.operation_function = self._concatenation_residual
+        else:
+            raise NotImplementedError('Unknown operation function.')
+
+    def forward(self, x, g):
+        '''
+        :param x: (b, c, t, h, w)
+        :param g: (b, g_d)
+        :return:
+        '''
+
+        output = self.operation_function(x, g)
+        return output
+
+    def _concatenation(self, x, g):
+        input_size = x.size()
+        batch_size = input_size[0]
+        assert batch_size == g.size(0)
+
+        # theta => (b, c, t, h, w) -> (b, i_c, t, h, w) -> (b, i_c, thw)
+        # phi   => (b, g_d) -> (b, i_c)
+        theta_x = self.theta(x)
+        theta_x_size = theta_x.size()
+
+        # g (b, c, t', h', w') -> phi_g (b, i_c, t', h', w')
+        #  Relu(theta_x + phi_g + bias) -> f = (b, i_c, thw) -> (b, i_c, t/s1, h/s2, w/s3)
+        phi_g = F.upsample(self.phi(g), size=theta_x_size[2:], mode=self.upsample_mode)
+        f = F.relu(theta_x + phi_g, inplace=True)
+
+        #  psi^T * f -> (b, psi_i_c, t/s1, h/s2, w/s3)
+        sigm_psi_f = F.sigmoid(self.psi(f))
+
+        # upsample the attentions and multiply
+        sigm_psi_f = F.upsample(sigm_psi_f, size=input_size[2:], mode=self.upsample_mode)
+        y = sigm_psi_f.expand_as(x) * x
+        W_y = self.W(y)
+
+        return W_y, sigm_psi_f
+
+    def _concatenation_debug(self, x, g):
+        input_size = x.size()
+        batch_size = input_size[0]
+        assert batch_size == g.size(0)
+
+        # theta => (b, c, t, h, w) -> (b, i_c, t, h, w) -> (b, i_c, thw)
+        # phi   => (b, g_d) -> (b, i_c)
+        theta_x = self.theta(x)
+        theta_x_size = theta_x.size()
+
+        # g (b, c, t', h', w') -> phi_g (b, i_c, t', h', w')
+        #  Relu(theta_x + phi_g + bias) -> f = (b, i_c, thw) -> (b, i_c, t/s1, h/s2, w/s3)
+        phi_g = F.upsample(self.phi(g), size=theta_x_size[2:], mode=self.upsample_mode)
+        f = F.softplus(theta_x + phi_g)
+
+        #  psi^T * f -> (b, psi_i_c, t/s1, h/s2, w/s3)
+        sigm_psi_f = F.sigmoid(self.psi(f))
+
+        # upsample the attentions and multiply
+        sigm_psi_f = F.upsample(sigm_psi_f, size=input_size[2:], mode=self.upsample_mode)
+        y = sigm_psi_f.expand_as(x) * x
+        W_y = self.W(y)
+
+        return W_y, sigm_psi_f
+
+    def _concatenation_residual(self, x, g):
+        input_size = x.size()
+        batch_size = input_size[0]
+        assert batch_size == g.size(0)
+
+        # theta => (b, c, t, h, w) -> (b, i_c, t, h, w) -> (b, i_c, thw)
+        # phi   => (b, g_d) -> (b, i_c)
+        theta_x = self.theta(x)
+        theta_x_size = theta_x.size()
+
+        # g (b, c, t', h', w') -> phi_g (b, i_c, t', h', w')
+        #  Relu(theta_x + phi_g + bias) -> f = (b, i_c, thw) -> (b, i_c, t/s1, h/s2, w/s3)
+        phi_g = F.upsample(self.phi(g), size=theta_x_size[2:], mode=self.upsample_mode)
+        f = F.relu(theta_x + phi_g, inplace=True)
+
+        #  psi^T * f -> (b, psi_i_c, t/s1, h/s2, w/s3)
+        f = self.psi(f).view(batch_size, 1, -1)
+        sigm_psi_f = F.softmax(f, dim=2).view(batch_size, 1, *theta_x.size()[2:])
+
+        # upsample the attentions and multiply
+        sigm_psi_f = F.upsample(sigm_psi_f, size=input_size[2:], mode=self.upsample_mode)
+        y = sigm_psi_f.expand_as(x) * x
+        W_y = self.W(y)
+
+        return W_y, sigm_psi_f
+
+
+class MedicaNetBasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, inplanes, planes, stride=1, dilation=1, downsample=None):
+        super(MedicaNetBasicBlock, self).__init__()
+        self.conv1 = self.conv3x3x3(inplanes, planes, stride=stride, dilation=dilation)
+        self.bn1 = nn.BatchNorm3d(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = self.conv3x3x3(planes, planes, dilation=dilation)
+        self.bn2 = nn.BatchNorm3d(planes)
+        self.downsample = downsample
+        self.stride = stride
+        self.dilation = dilation
+
+    def forward(self, x):
+        residual = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            residual = self.downsample(x)
+
+        out += residual
+        out = self.relu(out)
+
+        return out
+
+    def conv3x3x3(self, in_planes, out_planes, stride=1, dilation=1):
+        # 3x3x3 convolution with padding
+        return nn.Conv3d(
+            in_planes,
+            out_planes,
+            kernel_size=3,
+            dilation=dilation,
+            stride=stride,
+            padding=dilation,
+            bias=False)
+
+
+class MedicaNetBottleneck(nn.Module):
+    expansion = 4
+
+    def __init__(self, inplanes, planes, stride=1, dilation=1, downsample=None):
+        super(MedicaNetBottleneck, self).__init__()
+        self.conv1 = nn.Conv3d(inplanes, planes, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm3d(planes)
+        self.conv2 = nn.Conv3d(
+            planes, planes, kernel_size=3, stride=stride, dilation=dilation, padding=dilation, bias=False)
+        self.bn2 = nn.BatchNorm3d(planes)
+        self.conv3 = nn.Conv3d(planes, planes * 4, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm3d(planes * 4)
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = downsample
+        self.stride = stride
+        self.dilation = dilation
+
+    def forward(self, x):
+        residual = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = self.relu(out)
+
+        out = self.conv3(out)
+        out = self.bn3(out)
+
+        if self.downsample is not None:
+            residual = self.downsample(x)
+
+        out += residual
+        out = self.relu(out)
+
+        return out

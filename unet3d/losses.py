@@ -333,6 +333,128 @@ class VaeLoss(nn.Module):
 
         return boundary_loss + dice_loss + self.weight_L2 * loss_L2 + self.weight_KL * loss_KL
 
+def focalLoss(outputs, labels):
+
+    alpha = 0.1
+    gamma = 2.0
+    pt_1 = torch.where(torch.eq(labels, 1), outputs, torch.ones_like(outputs))
+    pt_0 = torch.where(torch.eq(labels, 0), outputs, torch.zeros_like(outputs))
+    pt_1 = torch.clamp(pt_1, 1e-3, .999)
+    pt_0 = torch.clamp(pt_0, 1e-3, .999)
+
+    # return -torch.sum(alpha * torch.pow(1. - pt_1, gamma) * torch.log(pt_1))\
+    # -torch.sum((1 - alpha) * torch.pow(pt_0, gamma) * torch.log(1. - pt_0))
+
+    return -torch.sum(torch.log(pt_1)) - torch.sum(torch.pow(pt_0, gamma) * torch.log(1. - pt_0))
+
+
+class bratsFocalLoss(nn.Module):
+    def __init__(self, epsilon=1e-5, weight=None, ignore_index=None, sigmoid_normalization=True,
+                 skip_last_target=False):
+        super(bratsFocalLoss, self).__init__()
+
+    def forward(self, outputs, labels):
+        wt, tc, et = outputs.chunk(3, dim=1)
+        s = wt.shape
+        wt = wt.view(s[0], s[2], s[3], s[4])
+        tc = tc.view(s[0], s[2], s[3], s[4])
+        et = et.view(s[0], s[2], s[3], s[4])
+
+        # bring masks into correct shape
+        wtMask, tcMask, etMask = labels.chunk(3, dim=1)
+        s = wtMask.shape
+        wtMask = wtMask.view(s[0], s[2], s[3], s[4])
+        tcMask = tcMask.view(s[0], s[2], s[3], s[4])
+        etMask = etMask.view(s[0], s[2], s[3], s[4])
+
+        wtloss = focalLoss(wt, wtMask)
+        tcloss = focalLoss(tc, tcMask)
+        etloss = focalLoss(et, etMask)
+
+        return (wtloss + tcloss + etloss) / 10
+
+
+class bratsMixedLoss(nn.Module):
+    def __init__(self, alpha=0.00001, epsilon=1e-5, weight=None, ignore_index=None, sigmoid_normalization=True,
+                 skip_last_target=False):
+        super(bratsMixedLoss, self).__init__()
+        self.dice_loss = BratsDiceLoss()
+        self.focal_loss = bratsFocalLoss()
+        self.alpha = alpha
+        if sigmoid_normalization:
+            self.normalization = nn.Sigmoid()
+        else:
+            self.normalization = nn.Softmax(dim=1)
+
+    def forward(self, outputs, labels):
+        focal_loss = self.focal_loss(outputs, labels)
+        dice_loss = self.dice_loss(outputs, labels)
+        return self.alpha*focal_loss+dice_loss
+
+
+class CaeLoss(nn.Module):
+    """
+    loss(input_shape, inp, out_VAE, z_mean, z_var, e=1e-8, weight_L2=0.1, weight_KL=0.1)
+    ------------------------------------------------------
+    Since keras does not allow custom loss functions to have arguments
+    other than the true and predicted labels, this function acts as a wrapper
+    that allows us to implement the custom loss used in the paper, involving
+    outputs from multiple layers.
+
+    L = - L<dice> + weight_L2 ∗ L<L2> + weight_KL ∗ L<KL>
+
+    - L<dice> is the dice loss between input and segmentation output.
+    - L<L2> is the L2 loss between the output of VAE part and the input.
+    - L<KL> is the standard KL divergence loss term for the VAE.
+
+    Parameters
+    ----------
+    `input_shape`: A 4-tuple, required
+        The shape of an image as the tuple (c, H, W, D), where c is
+        the no. of channels; H, W and D is the height, width and depth of the
+        input image, respectively.
+    `inp`: An keras.layers.Layer instance, required
+        The input layer of the model. Used internally.
+    `out_VAE`: An keras.layers.Layer instance, required
+        The output of VAE part of the decoder. Used internally.
+    `z_mean`: An keras.layers.Layer instance, required
+        The vector representing values of mean for the learned distribution
+        in the VAE part. Used internally.
+    `z_var`: An keras.layers.Layer instance, required
+        The vector representing values of variance for the learned distribution
+        in the VAE part. Used internally.
+    `e`: Float, optional
+        A small epsilon term to add in the denominator to avoid dividing by
+        zero and possible gradient explosion.
+    `weight_L2`: A real number, optional
+        The weight to be given to the L2 loss term in the loss function. Adjust to get best
+        results for your task. Defaults to 0.1.
+    `weight_KL`: A real number, optional
+        The weight to be given to the KL loss term in the loss function. Adjust to get best
+        results for your task. Defaults to 0.1.
+
+    Returns
+    -------
+    loss_(y_true, y_pred): A custom keras loss function
+        This function takes as input the predicted and ground labels, uses them
+        to calculate the dice loss. Combined with the L<KL> and L<L2 computed
+        earlier, it returns the total loss.
+    """
+    def __init__(self, weight=0.1):
+        super(CaeLoss, self).__init__()
+        self.boundary_loss = SurfaceLoss()
+        self.dice_loss = bratsMixedLoss()
+        self.cae_loss = nn.MSELoss()
+
+    def forward(self, inp, label, unet_out, cae_out):
+        # cae_loss = torch.mean(torch.pow(inp - cae_out, 2))
+        cae_loss = self.cae_loss(inp, cae_out)
+        boundary_loss = self.boundary_loss(unet_out, label)
+
+        dice_loss = self.dice_loss(unet_out, label)
+
+        return boundary_loss + dice_loss + cae_loss
+
 
 class GeneralizedDiceLoss(nn.Module):
     """Computes Generalized Dice Loss (GDL) as described in https://arxiv.org/pdf/1707.03237.pdf
@@ -649,6 +771,10 @@ def get_loss_criterion(config):
         return BinaryDiceLoss()
     elif name == 'BratsDiceLoss':
         return BratsDiceLoss()
+    elif name == 'bratsMixedLoss':
+        return bratsMixedLoss()
+    elif name == 'CaeLoss':
+        return CaeLoss()
     else:
         raise RuntimeError(f"Unsupported loss function: '{name}'. Supported losses: {SUPPORTED_LOSSES}")
 
