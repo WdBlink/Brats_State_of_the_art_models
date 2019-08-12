@@ -898,32 +898,34 @@ class NNNet_Cae(nn.Module):
 
         # create encoder levels
         encoderModules = []
-        encoderModules.append(ResEncoderModule(4, channels, False, True))
+        encoderModules.append(EncoderModule(4, channels, False, True))
         for i in range(self.levels - 2):
-            encoderModules.append(ResEncoderModule(channels * pow(2, i), channels * pow(2, i + 1), True, True))
-        encoderModules.append(ResEncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1),
+            encoderModules.append(EncoderModule(channels * pow(2, i), channels * pow(2, i + 1), True, True))
+        encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1),
                                             True, False))
         self.encoders = nn.ModuleList(encoderModules)
 
         self.greenblock = GreenBlock(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 1))
         # create decoder levels
         decoderModules = []
-        decoderModules.append(ResDecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2),
+        decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2),
                                             True, False))
         for i in range(self.levels - 2):
-            decoderModules.append(ResDecoderModule(
+            decoderModules.append(DecoderModule(
                 channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
-        decoderModules.append(ResDecoderModule(channels, channels, False, True))
+        decoderModules.append(DecoderModule(channels, channels, False, True))
         self.decoders = nn.ModuleList(decoderModules)
 
-        self.Cae_block = CaeBlock(480, in_channels)
+        self.Cae_block = CaeBlock(480, 1)
 
     def forward(self, x):
         inputStack = []
+        feature_maps = []
         for i in range(self.levels):
             x = self.encoders[i](x)
             if i < self.levels - 1:
                 inputStack.append(x)
+                # feature_maps.append(x)
 
         x = self.greenblock(x)
         cae_out = self.Cae_block(x)
@@ -935,7 +937,7 @@ class NNNet_Cae(nn.Module):
 
         x = self.lastConv(x)
         x = torch.sigmoid(x)
-        return x, cae_out
+        return x, cae_out, feature_maps
 
 
 class unet_CT_multi_att_dsv_3D(nn.Module):

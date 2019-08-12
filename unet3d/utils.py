@@ -120,25 +120,43 @@ class RunningAverageMulti:
         self.count1 = 0
         self.count2 = 0
         self.count3 = 0
+        self.count4 = 0
+        self.count5 = 0
+        self.count6 = 0
         self.sum1 = 0
         self.sum2 = 0
         self.sum3 = 0
-        self.avg1 = 0
-        self.avg2 = 0
-        self.avg3 = 0
+        self.sum4 = 0
+        self.sum5 = 0
+        self.sum6 = 0
+        self.dice_WT = 0
+        self.dice_TC = 0
+        self.dice_ET = 0
+        self.sens_WT = 0
+        self.sens_TC = 0
+        self.sens_ET = 0
 
     def update(self, value, n=1):
         self.count1 += n
         self.count2 += n
         self.count3 += n
+        self.count4 += n
+        self.count5 += n
+        self.count6 += n
 
         self.sum1 += value[0] * n
         self.sum2 += value[1] * n
         self.sum3 += value[2] * n
+        self.sum4 += value[3] * n
+        self.sum5 += value[4] * n
+        self.sum6 += value[5] * n
 
-        self.avg1 = self.sum1 / self.count1
-        self.avg2 = self.sum2 / self.count2
-        self.avg3 = self.sum3 / self.count3
+        self.dice_WT = self.sum1 / self.count1
+        self.dice_TC = self.sum2 / self.count2
+        self.dice_ET = self.sum3 / self.count3
+        self.sens_WT = self.sum4 / self.count4
+        self.sens_TC = self.sum5 / self.count5
+        self.sens_ET = self.sum6 / self.count6
 
 
 def find_maximum_patch_size(model, device):

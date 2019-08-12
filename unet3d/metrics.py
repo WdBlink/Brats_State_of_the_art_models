@@ -18,6 +18,17 @@ def dice(pred, target):
     return softDice(predBin, target, 0, True).item()
 
 
+def sensitivity(pred, target):
+    predBin = (pred > 0.5).float()
+    intersection = (predBin * target).sum()
+    allPositive = target.sum()
+
+    # special case for zero positives
+    if allPositive == 0:
+        return 1.0
+    return (intersection / allPositive).item()
+
+
 def softDice(pred, target, smoothing=1, nonSquared=False):
     intersection = (pred * target).sum(dim=(1, 2, 3))
     if nonSquared:
@@ -66,7 +77,11 @@ class Dice:
         dice_wt = dice(wt, wtMask)
         dice_tc = dice(tc, tcMask)
         dice_et = dice(et, etMask)
-        return dice_wt, dice_tc, dice_et
+
+        sens_wt = sensitivity(wt, wtMask)
+        sens_et = sensitivity(et, etMask)
+        sens_tc = sensitivity(tc, tcMask)
+        return dice_wt, dice_tc, dice_et, sens_wt, sens_tc, sens_et
 
 
 class DiceCoefficient:

@@ -8,7 +8,7 @@ from unet3d.config import load_config
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-from visualization import board_add_images
+from visualization import board_add_images, board_add_image
 
 from . import utils
 
@@ -165,7 +165,6 @@ class UNet3DTrainer:
         Returns:
             True if the training should be terminated immediately, False otherwise
         """
-
         train_losses = utils.RunningAverage()
         train_eval_scores_multi = utils.RunningAverageMulti()
 
@@ -181,7 +180,7 @@ class UNet3DTrainer:
 
             input, pid, target = self._split_training_batch(t)
 
-            output, loss = self._forward_pass(input, target, weight=None)
+            output, loss, feature_maps = self._forward_pass(input, target, weight=None)
 
             # output_sample = output[0, 1, :, :, 80].cpu().detach().numpy()
             # self.draw_picture(output_sample)
@@ -223,6 +222,10 @@ class UNet3DTrainer:
                 # visualize the feature map to tensorboard
                 board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
                 board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
+                if self.model_name == 'NNNet_Cae':
+                    for i, t in enumerate(feature_maps):
+                        board_add_image(self.writer, f'feature_map{i}', t, self.num_iterations)
+                    # board_add_images(self.writer, 'feature_map', feature_maps, self.num_iterations)
 
                 # compute eval criterion
                 eval_score = self.eval_criterion(output, target)
@@ -232,11 +235,11 @@ class UNet3DTrainer:
                 # log stats, params and images
                 self.logger.info(
                     f'Training stats. Loss: {train_losses.avg}. '
-                    f'Evaluation score WT:{train_eval_scores_multi.avg1}, '
-                    f'TC:{train_eval_scores_multi.avg2}, '
-                    f'ET:{train_eval_scores_multi.avg3}')
-                self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.avg1,
-                                      train_eval_scores_multi.avg2, train_eval_scores_multi.avg3)
+                    f'Evaluation score WT:{train_eval_scores_multi.dice_WT}, '
+                    f'TC:{train_eval_scores_multi.dice_TC}, '
+                    f'ET:{train_eval_scores_multi.dice_ET}')
+                self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.dice_WT,
+                                      train_eval_scores_multi.dice_TC, train_eval_scores_multi.dice_ET)
                 # self._log_params()
 
                 # self._log_images(input, target, output)
@@ -266,7 +269,7 @@ class UNet3DTrainer:
 
                     input, pid, target = self._split_training_batch(t)
 
-                    output, loss = self._forward_pass(input, target, weight=None)
+                    output, loss, feature_map = self._forward_pass(input, target, mode='val', weight=None)
                     val_losses.update(loss.item(), self._batch_size(input))
 
                     eval_score = self.eval_criterion(output, target)
@@ -275,7 +278,7 @@ class UNet3DTrainer:
                     val_scores_multi.update(eval_score, self._batch_size(input))
 
                     # visualize the feature map to tensorboard
-                    board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
+                    board_list = [input[0:1, 1:4, :, :, input.size(4)//2], output[0:1, :, :, :, output.size(4)//2], target[0:1, :, :, :, target.size(4)//2]]
                     board_add_images(self.writer, 'validate_output', board_list, self.num_iterations)
 
                     if self.validate_iters is not None and self.validate_iters <= i:
@@ -283,14 +286,21 @@ class UNet3DTrainer:
                         break
 
                 # self._log_stats('val', val_losses.avg, val_scores.avg)
-                self._log_stats_multi('val', val_losses.avg, val_scores_multi.avg1, val_scores_multi.avg2, val_scores_multi.avg3)
+                self._log_stats_multi('val', val_losses.avg,
+                                      val_scores_multi.dice_WT, val_scores_multi.dice_TC, val_scores_multi.dice_ET,
+                                      val_scores_multi.sens_WT, val_scores_multi.sens_TC, val_scores_multi.sens_ET)
                 # self.logger.info(f'Validation finished. Loss: {val_losses.avg}. Evaluation score: {val_scores.avg}')
-                self.logger.info(f'Validation finished. Loss: {val_losses.avg}. '
-                                 f'Evaluation score WT:{val_scores_multi.avg1}, '
-                                 f'TC:{val_scores_multi.avg2}, '
-                                 f'ET:{val_scores_multi.avg3}')
+                self.logger.info(f'Validation finished. \n'
+                                 f'Loss: {val_losses.avg} \n'
+                                 f'Evaluation score \n'
+                                 f'WT:{val_scores_multi.dice_WT}\n'
+                                 f'TC:{val_scores_multi.dice_TC} \n'
+                                 f'ET:{val_scores_multi.dice_ET} \n'
+                                 f'sensitivity WT:{val_scores_multi.sens_WT}\n'
+                                 f'sensitivity TC:{val_scores_multi.sens_TC}\n'
+                                 f'sensitivity ET:{val_scores_multi.sens_ET}')
 
-                return val_scores_multi.avg1
+                return val_scores_multi.dice_WT
         finally:
             # set back in training mode
             self.model.train()
@@ -310,16 +320,24 @@ class UNet3DTrainer:
             input, pid, target = t
         return input, pid, target
 
-    def _forward_pass(self, input, target, weight=None):
+    def _forward_pass(self, input, target, mode='train', weight=None):
         # forward pass
         output = self.model(input)
-
+        feature_maps = []
         # compute the loss
         if self.model_name == 'NNNet_Vae':
             loss = self.loss_criterion(input, output[1], output[0], target, output[2], output[3])
             output = output[0]
         elif self.model_name == 'NNNet_Cae':
             loss = self.loss_criterion(input, target, output[0], output[1])
+            if mode == 'train':
+                cae_out = output[1]
+                for i, t in enumerate(output[2]):
+                    size = t.size(4)
+                    channel = t.size(1)
+                    t = torch.sum(t, dim=1, keepdim=True)//channel
+                    feature_maps.append(t[:, :, :, :, size//2])
+                feature_maps.append(cae_out[:, :, :, :, cae_out.size(4)//2])
             output = output[0]
         else:
             if weight is None:
@@ -327,7 +345,7 @@ class UNet3DTrainer:
             else:
                 loss = self.loss_criterion(output, target, weight)
 
-        return output, loss
+        return output, loss, feature_maps
 
     def _is_best_eval_score(self, eval_score):
         if self.eval_score_higher_is_better:
@@ -371,12 +389,15 @@ class UNet3DTrainer:
         for tag, value in tag_value.items():
             self.writer.add_scalar(tag, value, self.num_iterations)
 
-    def _log_stats_multi(self, phase, loss_avg, eval_score_avg1, eval_score_avg2, eval_score_avg3):
+    def _log_stats_multi(self, phase, loss_avg, eval_score_avg1, eval_score_avg2, eval_score_avg3, eval_score_avg4, eval_score_avg5, eval_score_avg6):
         tag_value = {
             f'{phase}_loss_avg': loss_avg,
             f'{phase}_eval_score_avg1': eval_score_avg1,
             f'{phase}_eval_score_avg2': eval_score_avg2,
-            f'{phase}_eval_score_avg3': eval_score_avg3
+            f'{phase}_eval_score_avg3': eval_score_avg3,
+            f'{phase}_sensitivity_WT': eval_score_avg4,
+            f'{phase}_sensitivity_TC': eval_score_avg5,
+            f'{phase}_sensitivity_ET': eval_score_avg6
         }
 
         for tag, value in tag_value.items():

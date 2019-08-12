@@ -114,7 +114,7 @@ class FilterSliceBuilder(SliceBuilder):
 
 class BratsDataset(torch.utils.data.Dataset):
     #mode must be trian, test or val
-    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False, doMixUp=True):
+    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False, doMixUp=True, data_aug = True):
         super(BratsDataset, self).__init__()
         self.filePath = filePath
         self.mode = mode
@@ -124,6 +124,7 @@ class BratsDataset(torch.utils.data.Dataset):
         self.hasMasks = hasMasks
         self.returnOffsets = returnOffsets
         self.doMixUp = doMixUp
+        self.aug = data_aug
 
         #augmentation settings
         self.nnAugmentation = True
@@ -193,23 +194,25 @@ class BratsDataset(torch.utils.data.Dataset):
                     labels2 = self._toOrdinal(labels2)
                     labels2 = self._toEvaluationOneHot(labels2)
 
-            m1 = 0.3
-            m2 = 0.2
-            m3 = 0.1
+            m1 = 0.5
+            m2 = 0.3
+            m3 = 0.2
             alpha = 1.0
             lam = np.random.beta(alpha, alpha)
             image = lam * image + (1 - lam) * image2
 
             target = np.zeros_like(labels)
-            if lam > m1:
-                target[..., 0] = target[..., 0] + labels[..., 0]
-            if (1 - lam) > m1:
-                target[..., 0] = target[..., 0] + labels2[..., 0]
+            # if lam > m1:
+            #     target[..., 0] = target[..., 0] + labels[..., 0]
+            # if (1 - lam) > m1:
+            #     target[..., 0] = target[..., 0] + labels2[..., 0]
+            target[..., 0] = target[..., 0] + lam * labels[..., 0] + (1 - lam) * labels2[..., 0]
 
-            if lam > m2:
-                target[..., 1] = target[..., 1] + labels[..., 1]
-            if (1 - lam) > m2:
-                target[..., 1] = target[..., 1] + labels2[..., 1]
+            # if lam > m2:
+            #     target[..., 1] = target[..., 1] + labels[..., 1]
+            # if (1 - lam) > m2:
+            #     target[..., 1] = target[..., 1] + labels2[..., 1]
+            target[..., 1] = target[..., 1] + lam * labels[..., 1] + (1 - lam) * labels2[..., 1]
 
             if lam > m3:
                 target[..., 2] = target[..., 2] + labels[..., 2]
@@ -220,7 +223,7 @@ class BratsDataset(torch.utils.data.Dataset):
             labels = target
 
         #augment data
-        if self.mode == "train":
+        if self.mode == "train" and self.aug is True:
             image, labels = aug.augment3DImage(image,
                                                labels,
                                                defaultLabelValues,
@@ -492,7 +495,7 @@ def get_brats_train_loaders(config):
     # train_datasets = BraTSDataset(brats, train_ids, phase='train',
     #                               transformer_config=loaders_config['transformer'],
     #                               is_mixup=loaders_config['mixup'])
-    train_datasets = BratsDataset(train_path[0], randomCrop=[128, 128, 128], doMixUp=loaders_config['mixup'])
+    train_datasets = BratsDataset(train_path[0], randomCrop=[128, 128, 128], doMixUp=loaders_config['mixup'], data_aug=loaders_config['data_aug'])
 
     logger.info(f'Loading validation set from: {val_path}...')
     # brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train

@@ -525,11 +525,11 @@ class EncoderModule(nn.Module):
         if self.maxpool:
             x = F.max_pool3d(x, 2)
         doInplace = True and not self.hasDropout
-        x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=doInplace)
+        x = F.relu(self.gn1(self.conv1(x)), inplace=doInplace)
         if self.hasDropout:
             x = self.dropout(x)
         if self.secondConv:
-            x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=True)
+            x = F.relu(self.gn2(self.conv2(x)), inplace=True)
         return x
 
 
@@ -547,8 +547,8 @@ class DecoderModule(nn.Module):
 
     def forward(self, x):
         if self.firstConv:
-            x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=True)
-        x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=True)
+            x = F.relu(self.gn1(self.conv1(x)), inplace=True)
+        x = F.relu(self.gn2(self.conv2(x)), inplace=True)
         if self.upsample:
             x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
         return x
@@ -641,32 +641,32 @@ class CaeBlock(nn.Module):
         super(CaeBlock, self).__init__()
         self.conv_block = SingleConv(input_channels, 1, order=order, num_groups=num_groups)
         self.conv1 = conv3d(1, 128, kernel_size=1, bias=True, padding=0)
-        self.greenblock = GreenBlock(128, 128)
+        # self.greenblock = GreenBlock(128, 128)
         self.conv2 = conv3d(128, 64, kernel_size=1, bias=True, padding=0)
-        self.greenblock1 = GreenBlock(64, 64)
+        # self.greenblock1 = GreenBlock(64, 64)
         self.conv3 = conv3d(64, 32, kernel_size=1, bias=True, padding=0)
-        self.greenblock2 = GreenBlock(32, 32)
+        # self.greenblock2 = GreenBlock(32, 32)
         self.conv4 = conv3d(32, 16, kernel_size=1, bias=True, padding=0)
-        self.greenblock3 = GreenBlock(16, 16)
+        # self.greenblock3 = GreenBlock(16, 16)
         self.conv5 = conv3d(16, output_channels, kernel_size=1, bias=True, padding=0)
 
     def forward(self, x):
         x = self.conv_block(x)
         x = self.conv1(x)
         x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
-        x = self.greenblock(x)
+        # x = self.greenblock(x)
 
         x = self.conv2(x)
         x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
-        x = self.greenblock1(x)
+        # x = self.greenblock1(x)
 
         x = self.conv3(x)
         x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
-        x = self.greenblock2(x)
+        # x = self.greenblock2(x)
 
         x = self.conv4(x)
         x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
-        x = self.greenblock3(x)
+        # x = self.greenblock3(x)
 
         x = self.conv5(x)
         x = torch.sigmoid(x)

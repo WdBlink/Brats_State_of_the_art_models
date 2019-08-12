@@ -118,7 +118,7 @@ class RandomContrast:
 # remember to use spline_order=3 when transforming the labels
 class ElasticDeformation:
     """
-    Apply elasitc deformations of 3D patches on a per-voxel mesh. Assumes ZYX axis order!
+    Apply elasitc deformations of 3D patches on a per-voxel mesh. Assumes XYZ axis order!
     Based on: https://github.com/fcalvet/image_tools/blob/master/image_augmentation.py#L62
     """
 
@@ -141,8 +141,8 @@ class ElasticDeformation:
             dy = gaussian_filter(self.random_state.randn(*m.shape), self.sigma, mode="constant", cval=0) * self.alpha
             dx = gaussian_filter(self.random_state.randn(*m.shape), self.sigma, mode="constant", cval=0) * self.alpha
 
-            z_dim, y_dim, x_dim = m.shape
-            z, y, x = np.meshgrid(np.arange(z_dim), np.arange(y_dim), np.arange(x_dim), indexing='ij')
+            x_dim, y_dim, z_dim = m.shape
+            x, y, z = np.meshgrid(np.arange(x_dim), np.arange(y_dim), np.arange(z_dim), indexing='ij')
             indices = z + dz, y + dy, x + dx
             return map_coordinates(m, indices, order=self.spline_order, mode='reflect')
 

@@ -3,7 +3,7 @@ manual_seed: 0
 # model configuration
 model:
   # model class
-  name: resnet101
+  name: NoNewNet
   # number of input channels to the model
   in_channels: 4
   # number of output channels
@@ -19,17 +19,17 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/MeidcalNet_50_Adam_DataAug
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_NewMixUp_m3=0.2_DataAug/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # fine-tune a given pre-trained model
-  pre_trained: /home/server/github/MedicalNet/pretrain/resnet_50.pth
+  pre_trained: null
   # how many iterations between validations
   validate_after_iters: 50
   # how many iterations between tensorboard logging
-  log_after_iters: 20
+  log_after_iters: 50
   # max number of epochs
-  epochs: 100
+  epochs: 200
   # max number of iterations
   iters: 100000
   # model with higher eval score is considered better
@@ -41,11 +41,11 @@ optimizer:
   # initial learning rate
   learning_rate: 0.0001
   # weight decay
-  weight_decay: 0.002
+  weight_decay: 0.001
 # loss function configuration
 loss:
   # loss function to be used during training
-  name: BratsDiceLoss
+  name: DiceLoss_SurfaceLoss
   # A manual rescaling weight given to each class.
   loss_weight: null
   # a target value that is ignored and does not contribute to the input gradient
@@ -56,13 +56,19 @@ eval_metric:
   # a target label that is ignored during metric evaluation
   ignore_index: null
 lr_scheduler:
-  name: ExponentialLR
-  #milestones: [10, 30, 60]
+#  name: CosineAnnealingLR
+#  T_max : 60
+#  eta_min: 0
+  name: MultiStepLR
+  milestones: [180, 240, 300]
   gamma: 1
+
 # data loaders configuration
 loaders:
   # if use Mix Up
   mixup: True
+  # if use data augment
+  data_aug: True
   # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
   train_patch: [32, 64, 64]
   # train stride between patches
@@ -84,7 +90,7 @@ loaders:
   dataset_path:
     - '/home/server/data'
   # how many subprocesses to use for data loading
-  num_workers: 1
+  num_workers: 0
   # data transformations/augmentations
   transformer:
     train:

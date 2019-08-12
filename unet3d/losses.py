@@ -443,17 +443,17 @@ class CaeLoss(nn.Module):
     def __init__(self, weight=0.1):
         super(CaeLoss, self).__init__()
         self.boundary_loss = SurfaceLoss()
-        self.dice_loss = bratsMixedLoss()
+        self.dice_loss = BratsDiceLoss()
         self.cae_loss = nn.MSELoss()
 
     def forward(self, inp, label, unet_out, cae_out):
         # cae_loss = torch.mean(torch.pow(inp - cae_out, 2))
-        cae_loss = self.cae_loss(inp, cae_out)
-        boundary_loss = self.boundary_loss(unet_out, label)
+        cae_loss = self.cae_loss(inp[:, 2:3, :, :, :], cae_out)
+        # boundary_loss = self.boundary_loss(unet_out, label)
 
         dice_loss = self.dice_loss(unet_out, label)
 
-        return boundary_loss + dice_loss + cae_loss
+        return dice_loss + cae_loss
 
 
 class GeneralizedDiceLoss(nn.Module):
