@@ -506,6 +506,35 @@ class unetUp(nn.Module):
         return self.conv(outputs0)
 
 
+# class EncoderModule(nn.Module):
+#     def __init__(self, inChannels, outChannels, maxpool=False, secondConv=True, hasDropout=False):
+#         super(EncoderModule, self).__init__()
+#         groups = min(outChannels, 30)
+#         self.maxpool = maxpool
+#         self.secondConv = secondConv
+#         self.hasDropout = hasDropout
+#         self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
+#         self.gn1 = nn.GroupNorm(groups, outChannels)
+#         if secondConv:
+#             self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
+#             self.gn2 = nn.GroupNorm(groups, outChannels)
+#         if hasDropout:
+#             self.dropout = nn.Dropout3d(0.2, True)
+#
+#         # for m in self.children():
+#         #     init_weights(m, init_type='kaiming')
+#
+#     def forward(self, x):
+#         if self.maxpool:
+#             x = F.max_pool3d(x, 2)
+#         doInplace = True and not self.hasDropout
+#         x = F.relu(self.gn1(self.conv1(x)), inplace=doInplace)
+#         if self.hasDropout:
+#             x = self.dropout(x)
+#         if self.secondConv:
+#             x = F.relu(self.gn2(self.conv2(x)), inplace=True)
+#         return x
+
 class EncoderModule(nn.Module):
     def __init__(self, inChannels, outChannels, maxpool=False, secondConv=True, hasDropout=False):
         super(EncoderModule, self).__init__()
@@ -525,12 +554,36 @@ class EncoderModule(nn.Module):
         if self.maxpool:
             x = F.max_pool3d(x, 2)
         doInplace = True and not self.hasDropout
-        x = F.relu(self.gn1(self.conv1(x)), inplace=doInplace)
+        x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=doInplace)
         if self.hasDropout:
             x = self.dropout(x)
         if self.secondConv:
-            x = F.relu(self.gn2(self.conv2(x)), inplace=True)
+            x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=doInplace)
         return x
+
+
+# class DecoderModule(nn.Module):
+#     def __init__(self, inChannels, outChannels, upsample=False, firstConv=True):
+#         super(DecoderModule, self).__init__()
+#         groups = min(outChannels, 30)
+#         self.upsample = upsample
+#         self.firstConv = firstConv
+#         if firstConv:
+#             self.conv1 = nn.Conv3d(inChannels, inChannels, 3, padding=1, bias=False)
+#             self.gn1 = nn.GroupNorm(groups, inChannels)
+#         self.conv2 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
+#         self.gn2 = nn.GroupNorm(groups, outChannels)
+#
+#         # for m in self.children():
+#         #     init_weights(m, init_type='kaiming')
+#
+#     def forward(self, x):
+#         if self.firstConv:
+#             x = F.relu(self.gn1(self.conv1(x)), inplace=True)
+#         x = F.relu(self.gn2(self.conv2(x)), inplace=True)
+#         if self.upsample:
+#             x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
+#         return x
 
 
 class DecoderModule(nn.Module):
@@ -547,8 +600,8 @@ class DecoderModule(nn.Module):
 
     def forward(self, x):
         if self.firstConv:
-            x = F.relu(self.gn1(self.conv1(x)), inplace=True)
-        x = F.relu(self.gn2(self.conv2(x)), inplace=True)
+            x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=True)
+        x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=True)
         if self.upsample:
             x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
         return x

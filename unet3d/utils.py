@@ -4,7 +4,7 @@ import shutil
 import sys
 import scipy.sparse as sparse
 import cv2
-
+import nibabel as nib
 import numpy as np
 import torch
 from torch import Tensor
@@ -326,3 +326,12 @@ def deformation_to_transformation(dx, dy):
     map_y = (grid_y + dy).astype(np.float32)
 
     return map_x, map_y
+
+
+def save_nii(img_path, data, affine, header):
+    '''
+    Shortcut to save a nifty file
+    '''
+
+    nimg = nib.Nifti1Image(data, affine=affine, header=header)
+    nimg.to_filename(img_path)

@@ -303,11 +303,6 @@ class BratsDataset(torch.utils.data.Dataset):
     def _toOrdinal(self, labels):
         return np.argmax(labels, axis=3)
 
-    def make_crop(self, input):
-        # image = input[..., 40:200, 40:200, 13:141]
-        image = input[..., 72:200, 72:200, 13:141]
-        return image
-
 
 class HDF5Dataset(Dataset):
     """
@@ -507,9 +502,14 @@ def get_brats_train_loaders(config):
     num_workers = loaders_config.get('num_workers', 1)
     logger.info(f'Number of workers for train/val datasets: {num_workers}')
     # when training with volumetric data use batch_size of 1 due to GPU memory constraints
+
+    challengeValset = BratsDataset(loaders_config['test_path'][0], mode="validation", hasMasks=False, returnOffsets=True)
+
     return {
-        'train': DataLoader(train_datasets, batch_size=1, shuffle=True, num_workers=num_workers),
-        'val': DataLoader(val_datasets, batch_size=1, shuffle=True, num_workers=num_workers)
+        'train': DataLoader(train_datasets, batch_size=loaders_config['batch_size'], shuffle=True, num_workers=num_workers),
+        'val': DataLoader(val_datasets, batch_size=1, shuffle=True, num_workers=num_workers),
+        'challenge': DataLoader(challengeValset, batch_size=1, shuffle=False, pin_memory=True,
+                                                     num_workers=1)
     }
 #
 # import os

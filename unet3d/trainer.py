@@ -17,7 +17,6 @@ config = load_config()
 
 class UNet3DTrainer:
     """3D UNet trainer.
-
     Args:
         model (Unet3D): UNet 3D model to be trained
         optimizer (nn.optim.Optimizer): optimizer used for training
@@ -47,7 +46,7 @@ class UNet3DTrainer:
                  eval_criterion, device, loaders, checkpoint_dir, model_name,
                  max_num_epochs=100, max_num_iterations=1e5,
                  validate_after_iters=100, log_after_iters=100,
-                 validate_iters=None, num_iterations=1, num_epoch=0,
+                 validate_iters=None, num_iterations=0, num_epoch=0,
                  eval_score_higher_is_better=True, best_eval_score=None,
                  logger=None):
         # if logger is None:
@@ -213,6 +212,10 @@ class UNet3DTrainer:
                 # save checkpoint
                 self._save_checkpoint(is_best)
 
+                # make challenge predict
+                if is_best:
+                    self.makePredictions(self.loaders['challenge'])
+
             if self.num_iterations % self.log_after_iters == 0:
                 # if model contains final_activation layer for normalizing logits apply it, otherwise both
                 # the evaluation metric as well as images in tensorboard will be incorrectly computed
@@ -234,12 +237,15 @@ class UNet3DTrainer:
 
                 # log stats, params and images
                 self.logger.info(
-                    f'Training stats. Loss: {train_losses.avg}. '
-                    f'Evaluation score WT:{train_eval_scores_multi.dice_WT}, '
-                    f'TC:{train_eval_scores_multi.dice_TC}, '
+                    f'Training stats.\n'
+                    f'Loss: {train_losses.avg}. \n'
+                    f'Evaluation score WT:{train_eval_scores_multi.dice_WT}, \n'
+                    f'TC:{train_eval_scores_multi.dice_TC}, \n'
                     f'ET:{train_eval_scores_multi.dice_ET}')
                 self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.dice_WT,
-                                      train_eval_scores_multi.dice_TC, train_eval_scores_multi.dice_ET)
+                                      train_eval_scores_multi.dice_TC, train_eval_scores_multi.dice_ET,
+                                      train_eval_scores_multi.sens_WT, train_eval_scores_multi.sens_TC,
+                                      train_eval_scores_multi.sens_ET)
                 # self._log_params()
 
                 # self._log_images(input, target, output)
@@ -249,7 +255,7 @@ class UNet3DTrainer:
                     f'Maximum number of iterations {self.max_num_iterations} exceeded. Finishing training...')
                 return True
 
-            self.num_iterations += 1
+            self.num_iterations += config['loaders']['batch_size']
 
         return False
 
@@ -274,11 +280,16 @@ class UNet3DTrainer:
 
                     eval_score = self.eval_criterion(output, target)
 
+                    # print the bad guy
+                    if eval_score[0] < 0.5:
+                        self.logger.info(f'The patient {pid} score is {eval_score}!!!')
+
                     # val_scores.update(eval_score.item(), self._batch_size(input))
                     val_scores_multi.update(eval_score, self._batch_size(input))
 
                     # visualize the feature map to tensorboard
-                    board_list = [input[0:1, 1:4, :, :, input.size(4)//2], output[0:1, :, :, :, output.size(4)//2], target[0:1, :, :, :, target.size(4)//2]]
+                    board_list = [input[0:1, 1:4, :, :, input.size(4)//2], output[0:1, :, :, :, output.size(4)//2],
+                                  target[0:1, :, :, :, target.size(4)//2]]
                     board_add_images(self.writer, 'validate_output', board_list, self.num_iterations)
 
                     if self.validate_iters is not None and self.validate_iters <= i:
@@ -304,6 +315,52 @@ class UNet3DTrainer:
         finally:
             # set back in training mode
             self.model.train()
+
+    def makePredictions(self, challenge_loader):
+        # model is already loaded from disk by constructor
+
+        basePath = os.path.join(config['trainer']['checkpoint_dir'], "_iter{}".format(self.num_iterations))
+        if not os.path.exists(basePath):
+            os.makedirs(basePath)
+
+        with torch.no_grad():
+            for i, data in enumerate(challenge_loader):
+                inputs, pids, xOffset, yOffset, zOffset = data
+                print("processing {}".format(pids[0]))
+                inputs = inputs.to(config['device'])
+
+                # predict labels and bring into required shape
+                outputs = self.model(inputs)
+                outputs = outputs[:, :, :, :, :155]
+                s = outputs.shape
+                fullsize = outputs.new_zeros((s[0], s[1], 240, 240, 155))
+                if xOffset + s[2] > 240:
+                    outputs = outputs[:, :, :240 - xOffset, :, :]
+                if yOffset + s[3] > 240:
+                    outputs = outputs[:, :, :, :240 - yOffset, :]
+                if zOffset + s[4] > 155:
+                    outputs = outputs[:, :, :, :, :155 - zOffset]
+                fullsize[:, :, xOffset:xOffset + s[2], yOffset:yOffset + s[3], zOffset:zOffset + s[4]] = outputs
+
+                # binarize output
+                wt, tc, et = fullsize.chunk(3, dim=1)
+                s = fullsize.shape
+                wt = (wt > 0.6).view(s[2], s[3], s[4])
+                tc = (tc > 0.5).view(s[2], s[3], s[4])
+                et = (et > 0.7).view(s[2], s[3], s[4])
+
+                result = fullsize.new_zeros((s[2], s[3], s[4]), dtype=torch.uint8)
+                result[wt] = 2
+                result[tc] = 1
+                result[et] = 4
+
+                npResult = result.cpu().numpy()
+                max = npResult.max()
+                min = npResult.min()
+                path = os.path.join(basePath, "{}.nii.gz".format(pids[0]))
+                utils.save_nii(path, npResult, None, None)
+
+        print("Done :)")
 
     def _split_training_batch(self, t):
         def _move_to_device(input):

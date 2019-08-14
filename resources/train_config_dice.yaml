@@ -19,15 +19,17 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_NewMixUp_m3=0.2/
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
-  resume: null
+  resume: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/last_checkpoint.pytorch
   # fine-tune a given pre-trained model
   pre_trained: null
+  # output test result model
+  test_model: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint2.pytorch
   # how many iterations between validations
-  validate_after_iters: 50
+  validate_after_iters: 51
   # how many iterations between tensorboard logging
-  log_after_iters: 50
+  log_after_iters: 51
   # max number of epochs
   epochs: 200
   # max number of iterations
@@ -39,9 +41,9 @@ optimizer:
   #mode
   mode: Adam
   # initial learning rate
-  learning_rate: 0.0001
+  learning_rate: 0.00005
   # weight decay
-  weight_decay: 0.001
+  weight_decay: 0.00003
 # loss function configuration
 loss:
   # loss function to be used during training
@@ -61,14 +63,18 @@ lr_scheduler:
 #  eta_min: 0
   name: MultiStepLR
   milestones: [180, 240, 300]
-  gamma: 1
-
+  gamma: 0.5
+#  name: ReduceLROnPlateau
+#  factor: 0.2
+#  patience: 180
 # data loaders configuration
 loaders:
+  # batch size
+  batch_size: 2
   # if use Mix Up
-  mixup: True
+  mixup: False
   # if use data augment
-  data_aug: False
+  data_aug: True
   # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
   train_patch: [32, 64, 64]
   # train stride between patches
@@ -87,8 +93,12 @@ loaders:
   # paths to the validation datasets
   val_path:
     - '/home/server/BraTS19_preprocessing/training/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
+  test_path:
+    - '/home/server/BraTS19_preprocessing/validation/data_3D.hdf5'
   dataset_path:
     - '/home/server/data'
+  pred_path:
+    - '/home/server/BraTS19_preprocessing/validation/'
   # how many subprocesses to use for data loading
   num_workers: 0
   # data transformations/augmentations

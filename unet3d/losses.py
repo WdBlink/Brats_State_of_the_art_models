@@ -69,14 +69,38 @@ class BratsDiceLoss(nn.Module):
         etMask = etMask.view(s[0], s[2], s[3], s[4])
 
         # calculate losses
-        wtLoss = self.diceLoss(wt, wtMask, nonSquared=self.nonSquared)
-        tcLoss = self.diceLoss(tc, tcMask, nonSquared=self.nonSquared)
-        etLoss = self.diceLoss(et, etMask, nonSquared=self.nonSquared)
+        wtLoss = self.weightedDiceLoss(wt, wtMask, mean=0.03)
+        tcLoss = self.weightedDiceLoss(tc, tcMask, mean=0.02)
+        etLoss = self.weightedDiceLoss(et, etMask, mean=0.01)
 
         return (wtLoss + tcLoss + etLoss) / 5
 
     def diceLoss(self, pred, target, nonSquared=False):
         return 1 - self.softDice(pred, target, nonSquared=nonSquared)
+
+    def weightedDiceLoss(self, pred, target, smoothing=1, mean=0.01):
+
+        mean = mean
+        w_1 = 1 / mean ** 2
+        w_0 = 1 / (1 - mean) ** 2
+
+        pred_1 = pred
+        target_1 = target
+        pred_0 = 1 - pred
+        target_0 = 1 - target
+
+        intersection_1 = (pred_1 * target_1).sum(dim=(1, 2, 3))
+        intersection_0 = (pred_0 * target_0).sum(dim=(1, 2, 3))
+        intersection = w_0 * intersection_0 + w_1 * intersection_1
+
+        union_1 = (pred_1).sum() + (target_1).sum()
+        union_0 = (pred_0).sum() + (target_0).sum()
+        union = w_0 * union_0 + w_1 * union_1
+
+        dice = (2 * intersection + smoothing) / (union + smoothing)
+        # fix nans
+        dice[dice != dice] = dice.new_tensor([1.0])
+        return 1 - dice.mean()
 
     def softDice(self, pred, target, smoothing=1, nonSquared=False):
         intersection = (pred * target).sum(dim=(1, 2, 3))
@@ -449,11 +473,11 @@ class CaeLoss(nn.Module):
     def forward(self, inp, label, unet_out, cae_out):
         # cae_loss = torch.mean(torch.pow(inp - cae_out, 2))
         cae_loss = self.cae_loss(inp[:, 2:3, :, :, :], cae_out)
-        # boundary_loss = self.boundary_loss(unet_out, label)
+        boundary_loss = self.boundary_loss(unet_out, label)
 
         dice_loss = self.dice_loss(unet_out, label)
 
-        return dice_loss + cae_loss
+        return dice_loss + cae_loss + boundary_loss
 
 
 class GeneralizedDiceLoss(nn.Module):

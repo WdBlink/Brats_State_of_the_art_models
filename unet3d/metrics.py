@@ -13,13 +13,13 @@ LOGGER = get_logger('EvalMetric')
 SUPPORTED_METRICS = ['dice', 'iou', 'boundary_ap', 'dt_ap', 'quantized_dt_ap', 'angle', 'inverse_angular']
 
 
-def dice(pred, target):
-    predBin = (pred > 0.5).float()
+def dice(pred, target, threshold=0.5):
+    predBin = (pred > threshold).float()
     return softDice(predBin, target, 0, True).item()
 
 
-def sensitivity(pred, target):
-    predBin = (pred > 0.5).float()
+def sensitivity(pred, target, threshold=0.5):
+    predBin = (pred > threshold).float()
     intersection = (predBin * target).sum()
     allPositive = target.sum()
 
@@ -74,9 +74,9 @@ class Dice:
         tcMask = tcMask.view(s[0], s[2], s[3], s[4])
         etMask = etMask.view(s[0], s[2], s[3], s[4])
 
-        dice_wt = dice(wt, wtMask)
-        dice_tc = dice(tc, tcMask)
-        dice_et = dice(et, etMask)
+        dice_wt = dice(wt, wtMask, threshold=0.6)
+        dice_tc = dice(tc, tcMask, threshold=0.5)
+        dice_et = dice(et, etMask, threshold=0.7)
 
         sens_wt = sensitivity(wt, wtMask)
         sens_et = sensitivity(et, etMask)
