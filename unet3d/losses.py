@@ -69,8 +69,8 @@ class BratsDiceLoss(nn.Module):
         etMask = etMask.view(s[0], s[2], s[3], s[4])
 
         # calculate losses
-        wtLoss = self.weightedDiceLoss(wt, wtMask, mean=0.03)
-        tcLoss = self.weightedDiceLoss(tc, tcMask, mean=0.02)
+        wtLoss = self.weightedDiceLoss(wt, wtMask, mean=0.01)
+        tcLoss = self.weightedDiceLoss(tc, tcMask, mean=0.01)
         etLoss = self.weightedDiceLoss(et, etMask, mean=0.01)
 
         return (wtLoss + tcLoss + etLoss) / 5

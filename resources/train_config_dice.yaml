@@ -19,15 +19,15 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/OriginalTumorMixUp_NoNewNet_SGD_InstanceNorm/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
-  resume: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/last_checkpoint.pytorch
+  resume: null
   # fine-tune a given pre-trained model
   pre_trained: null
   # output test result model
-  test_model: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint2.pytorch
+  test_model: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint3.pytorch
   # how many iterations between validations
-  validate_after_iters: 51
+  validate_after_iters: 101
   # how many iterations between tensorboard logging
   log_after_iters: 51
   # max number of epochs
@@ -41,7 +41,7 @@ optimizer:
   #mode
   mode: Adam
   # initial learning rate
-  learning_rate: 0.00005
+  learning_rate: 0.0003
   # weight decay
   weight_decay: 0.00003
 # loss function configuration
@@ -58,23 +58,25 @@ eval_metric:
   # a target label that is ignored during metric evaluation
   ignore_index: null
 lr_scheduler:
-#  name: CosineAnnealingLR
-#  T_max : 60
-#  eta_min: 0
-  name: MultiStepLR
-  milestones: [180, 240, 300]
-  gamma: 0.5
+  name: CosineAnnealingLR
+  T_max : 60
+  eta_min: 0
+
+#  name: MultiStepLR
+#  milestones: [180, 240, 300]
+#  gamma: 0.5
+
 #  name: ReduceLROnPlateau
 #  factor: 0.2
 #  patience: 180
 # data loaders configuration
 loaders:
   # batch size
-  batch_size: 2
+  batch_size: 1
   # if use Mix Up
-  mixup: False
+  mixup: True
   # if use data augment
-  data_aug: True
+  data_aug: False
   # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
   train_patch: [32, 64, 64]
   # train stride between patches

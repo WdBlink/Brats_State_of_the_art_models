@@ -544,9 +544,13 @@ class EncoderModule(nn.Module):
         self.hasDropout = hasDropout
         self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
         self.gn1 = nn.GroupNorm(groups, outChannels)
+        self.bn1 = nn.BatchNorm3d(outChannels)
+        self.in1 = nn.InstanceNorm3d(outChannels)
         if secondConv:
             self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
             self.gn2 = nn.GroupNorm(groups, outChannels)
+            self.bn2 = nn.BatchNorm3d(outChannels)
+            self.in2 = nn.InstanceNorm3d(outChannels)
         if hasDropout:
             self.dropout = nn.Dropout3d(0.2, True)
 
@@ -554,11 +558,15 @@ class EncoderModule(nn.Module):
         if self.maxpool:
             x = F.max_pool3d(x, 2)
         doInplace = True and not self.hasDropout
-        x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=doInplace)
+        # x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=doInplace)
+        # x = F.leaky_relu(self.bn1(self.conv1(x)), inplace=doInplace)
+        x = F.leaky_relu(self.in1(self.conv1(x)), inplace=doInplace)
         if self.hasDropout:
             x = self.dropout(x)
         if self.secondConv:
-            x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=doInplace)
+            # x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=doInplace)
+            # x = F.leaky_relu(self.bn2(self.conv2(x)), inplace=doInplace)
+            x = F.leaky_relu(self.in2(self.conv2(x)), inplace=doInplace)
         return x
 
 
@@ -595,13 +603,21 @@ class DecoderModule(nn.Module):
         if firstConv:
             self.conv1 = nn.Conv3d(inChannels, inChannels, 3, padding=1, bias=False)
             self.gn1 = nn.GroupNorm(groups, inChannels)
+            self.bn1 = nn.BatchNorm3d(inChannels)
+            self.in1 = nn.InstanceNorm3d(inChannels)
         self.conv2 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
         self.gn2 = nn.GroupNorm(groups, outChannels)
+        self.bn2 = nn.BatchNorm3d(outChannels)
+        self.in2 = nn.InstanceNorm3d(outChannels)
 
     def forward(self, x):
         if self.firstConv:
-            x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=True)
-        x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=True)
+            # x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=True)
+            # x = F.leaky_relu(self.bn1(self.conv1(x)), inplace=True)
+            x = F.leaky_relu(self.in1(self.conv1(x)), inplace=True)
+        # x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=True)
+        # x = F.leaky_relu(self.bn2(self.conv2(x)), inplace=True)
+        x = F.leaky_relu(self.in2(self.conv2(x)), inplace=True)
         if self.upsample:
             x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
         return x

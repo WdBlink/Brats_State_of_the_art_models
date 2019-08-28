@@ -25,16 +25,6 @@ model_path = config['trainer']['test_model']
 logger.info(f'Loading model from {model_path}...')
 utils.load_checkpoint(model_path, model)
 
-# Run on GPU or CPU
-# if torch.cuda.is_available():
-#     print("using cuda (", torch.cuda.device_count(), "device(s))")
-#     if torch.cuda.device_count() > 1:
-#         model = nn.DataParallel(model)
-#     device = torch.device("cuda:1")
-# else:
-#     device = torch.device("cpu")
-#     print("using cpu")
-# model = model.to(device)
 logger.info(f"Sending the model to '{config['device']}'")
 model = model.to('cuda:0')
 
@@ -57,6 +47,7 @@ def makePredictions():
     with torch.no_grad():
         for i, data in enumerate(challengeValloader):
             inputs, pids, xOffset, yOffset, zOffset = data
+            print('***********************************')
             print("processing {}".format(pids[0]))
             inputs = inputs.to('cuda:0')
 

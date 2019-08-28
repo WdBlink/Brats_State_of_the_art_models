@@ -74,9 +74,9 @@ class Dice:
         tcMask = tcMask.view(s[0], s[2], s[3], s[4])
         etMask = etMask.view(s[0], s[2], s[3], s[4])
 
-        dice_wt = dice(wt, wtMask, threshold=0.6)
+        dice_wt = dice(wt, wtMask, threshold=0.5)
         dice_tc = dice(tc, tcMask, threshold=0.5)
-        dice_et = dice(et, etMask, threshold=0.7)
+        dice_et = dice(et, etMask, threshold=0.5)
 
         sens_wt = sensitivity(wt, wtMask)
         sens_et = sensitivity(et, etMask)

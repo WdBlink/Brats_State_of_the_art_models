@@ -46,7 +46,7 @@ class UNet3DTrainer:
                  eval_criterion, device, loaders, checkpoint_dir, model_name,
                  max_num_epochs=100, max_num_iterations=1e5,
                  validate_after_iters=100, log_after_iters=100,
-                 validate_iters=None, num_iterations=0, num_epoch=0,
+                 validate_iters=None, num_iterations=1, num_epoch=0,
                  eval_score_higher_is_better=True, best_eval_score=None,
                  logger=None):
         # if logger is None:
@@ -172,7 +172,7 @@ class UNet3DTrainer:
 
         for i, t in enumerate(tqdm(train_loader)):
 
-            print(
+            self.logger.info(
                 f'Training iteration {self.num_iterations}. '
                 f'Batch {i}. '
                 f'Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
@@ -213,8 +213,8 @@ class UNet3DTrainer:
                 self._save_checkpoint(is_best)
 
                 # make challenge predict
-                if is_best:
-                    self.makePredictions(self.loaders['challenge'])
+                # if is_best:
+                #     self.makePredictions(self.loaders['challenge'])
 
             if self.num_iterations % self.log_after_iters == 0:
                 # if model contains final_activation layer for normalizing logits apply it, otherwise both
@@ -257,6 +257,8 @@ class UNet3DTrainer:
 
             self.num_iterations += config['loaders']['batch_size']
 
+        self.logger.info('make challenge pred')
+        self.makePredictions(self.loaders['challenge'])
         return False
 
     def validate(self, val_loader):
@@ -319,7 +321,7 @@ class UNet3DTrainer:
     def makePredictions(self, challenge_loader):
         # model is already loaded from disk by constructor
 
-        basePath = os.path.join(config['trainer']['checkpoint_dir'], "_iter{}".format(self.num_iterations))
+        basePath = os.path.join(config['trainer']['checkpoint_dir'], "_iter{}".format(self.num_epoch))
         if not os.path.exists(basePath):
             os.makedirs(basePath)
 
