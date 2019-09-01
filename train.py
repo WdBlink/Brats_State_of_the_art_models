@@ -1,5 +1,5 @@
 import importlib
-
+import os
 import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -35,7 +35,7 @@ def _create_trainer(config, model, optimizer, lr_scheduler, loss_criterion, eval
     elif pre_trained is not None:
         # fine-tune a given pre-trained model
         return UNet3DTrainer.from_pretrained(pre_trained, model, optimizer, lr_scheduler, loss_criterion,
-                                             eval_criterion, device=config['device'], loaders=loaders,
+                                             eval_criterion, device=config['default_device'], loaders=loaders,
                                              max_num_epochs=trainer_config['epochs'],
                                              max_num_iterations=trainer_config['iters'],
                                              validate_after_iters=trainer_config['validate_after_iters'],
@@ -45,7 +45,7 @@ def _create_trainer(config, model, optimizer, lr_scheduler, loss_criterion, eval
     else:
         # start training from scratch
         return UNet3DTrainer(model, optimizer, lr_scheduler, loss_criterion, eval_criterion,
-                             config['device'], loaders, trainer_config['checkpoint_dir'],
+                             config['default_device'], loaders, trainer_config['checkpoint_dir'],
                              max_num_epochs=trainer_config['epochs'],
                              max_num_iterations=trainer_config['iters'],
                              validate_after_iters=trainer_config['validate_after_iters'],
@@ -100,6 +100,9 @@ def main():
     config = load_config()
     logger.info(config)
 
+    os.environ['CUDA_VISIBLE_DEVICES'] = config['default_device']
+    assert torch.cuda.is_available(), "Currently, we only support CUDA version"
+
     manual_seed = config.get('manual_seed', None)
     if manual_seed is not None:
         logger.info(f'Seed the RNG for all devices with {manual_seed}')
@@ -113,8 +116,9 @@ def main():
     # model, parameters = generate_model(MedConfig)
 
     # put the model on GPUs
-    logger.info(f"Sending the model to '{config['device']}'")
-    model = model.to(config['device'])
+    logger.info(f"Sending the model to '{config['default_device']}'")
+    model = torch.nn.DataParallel(model).cuda()
+
     # Log the number of learnable parameters
     logger.info(f'Number of learnable params {get_number_of_learnable_parameters(model)}')
 

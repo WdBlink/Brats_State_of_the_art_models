@@ -145,7 +145,7 @@ class BratsDataset(torch.utils.data.Dataset):
         self.openFileIfNotOpen()
 
         #load from hdf5 file
-        image1 = self.file["images_" + self.mode][index, ...]
+        image = self.file["images_" + self.mode][index, ...]
         if self.hasMasks: labels = self.file["masks_" + self.mode][index, ...]
 
         # Prepare data depeinding on soft/hard augmentation scheme
@@ -213,28 +213,33 @@ class BratsDataset(torch.utils.data.Dataset):
                                                self.doElasticAug,
                                                self.sigma)
 
+            wt = labels2[..., 0]
             _wt = np.where(wt == 1, 0, 1)
-            image_hollow = np.einsum('whdc,whd->whdc', image1, _wt)
-            image = image_hollow + lam*tumor2
+            image_hollow = np.einsum('whdc,whd->whdc', image, _wt)
+            image = image_hollow + lam * tumor2
+
+            # label smoothing
+            confidence = 1
+            uk = 0
 
             target = np.zeros_like(labels)
             # if lam > m1:
             #     target[..., 0] = target[..., 0] + labels[..., 0]
             # if (1 - lam) > m1:
             #     target[..., 0] = target[..., 0] + labels2[..., 0]
-            target[..., 0] = target[..., 0] + labels[..., 0] + lam * labels2[..., 0]
+            target[..., 0] = target[..., 0] + confidence * labels[..., 0] + uk + lam * labels2[..., 0]
 
             # if lam > m2:
             #     target[..., 1] = target[..., 1] + labels[..., 1]
             # if (1 - lam) > m2:
             #     target[..., 1] = target[..., 1] + labels2[..., 1]
-            target[..., 1] = target[..., 1] + labels[..., 1] + lam * labels2[..., 1]
+            target[..., 1] = target[..., 1] + confidence * labels[..., 1] + uk + lam * labels2[..., 1]
 
             # if lam > m3:
             #     target[..., 2] = target[..., 2] + labels[..., 2]
             # if (1 - lam) > m3:
             #     target[..., 2] = target[..., 2] + labels2[..., 2]
-            target[..., 2] = target[..., 2] + labels[..., 2] + lam * labels2[..., 2]
+            target[..., 2] = target[..., 2] + confidence * labels[..., 2] + uk + lam * labels2[..., 2]
 
             target[target > 1] = 1
             labels = target
@@ -264,7 +269,8 @@ class BratsDataset(torch.utils.data.Dataset):
             image = image[x:x+self.randomCrop[0], y:y+self.randomCrop[1], z:z+self.randomCrop[2], :]
             if self.hasMasks: labels = labels[x:x + self.randomCrop[0], y:y + self.randomCrop[1], z:z + self.randomCrop[2], :]
 
-        image = np.transpose(image1, (3, 0, 1, 2))  # bring into NCWH format
+        image = np.transpose(image, (3, 0, 1, 2))  # bring into NCWH format
+
         if self.hasMasks: labels = np.transpose(labels, (3, 0, 1, 2))  # bring into NCWH format
 
         # to tensor
@@ -507,7 +513,7 @@ def get_brats_train_loaders(config):
     # train_datasets = BraTSDataset(brats, train_ids, phase='train',
     #                               transformer_config=loaders_config['transformer'],
     #                               is_mixup=loaders_config['mixup'])
-    train_datasets = BratsDataset(train_path[0], doMixUp=loaders_config['mixup'], data_aug=loaders_config['data_aug'])
+    train_datasets = BratsDataset(train_path[0], randomCrop=[128, 128, 128], doMixUp=loaders_config['mixup'], data_aug=loaders_config['data_aug'])
 
     logger.info(f'Loading validation set from: {val_path}...')
     # brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train

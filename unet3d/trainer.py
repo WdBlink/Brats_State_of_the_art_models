@@ -4,6 +4,9 @@ import os
 import numpy as np
 import torch
 import datetime
+import cv2
+import matplotlib.pyplot as plt
+plt.switch_backend('agg')
 from unet3d.config import load_config
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -46,7 +49,7 @@ class UNet3DTrainer:
                  eval_criterion, device, loaders, checkpoint_dir, model_name,
                  max_num_epochs=100, max_num_iterations=1e5,
                  validate_after_iters=100, log_after_iters=100,
-                 validate_iters=None, num_iterations=1, num_epoch=0,
+                 validate_iters=None, num_iterations=0, num_epoch=0,
                  eval_score_higher_is_better=True, best_eval_score=None,
                  logger=None):
         # if logger is None:
@@ -61,7 +64,7 @@ class UNet3DTrainer:
         self.scheduler = lr_scheduler
         self.loss_criterion = loss_criterion
         self.eval_criterion = eval_criterion
-        self.device = device
+        self.device = 0
         self.loaders = loaders
         self.checkpoint_dir = checkpoint_dir
         self.model_name = model_name
@@ -122,7 +125,7 @@ class UNet3DTrainer:
                         device, loaders,
                         max_num_epochs=100, max_num_iterations=1e5,
                         validate_after_iters=100, log_after_iters=100,
-                        validate_iters=None, num_iterations=1, num_epoch=0,
+                        validate_iters=None, num_iterations=0, num_epoch=0,
                         eval_score_higher_is_better=True, best_eval_score=None,
                         logger=None):
         logger.info(f"Logging pre-trained model from '{pre_trained}'...")
@@ -172,12 +175,106 @@ class UNet3DTrainer:
 
         for i, t in enumerate(tqdm(train_loader)):
 
-            self.logger.info(
+            print(
                 f'Training iteration {self.num_iterations}. '
                 f'Batch {i}. '
                 f'Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
 
             input, pid, target = self._split_training_batch(t)
+
+            # def multiclass_project_T1_EC(result, mask):
+            #     # result shape [H,w]
+            #     # mask shape [H,w]
+            #     # return shape [H,W,3]
+            #     WT = mask[0, ...]
+            #     TC = mask[1, ...]
+            #     ET = mask[2, ...]
+            #
+            #     # result = result.copy()
+            #     # result = result.astype(np.float32)
+            #     # result = result / result.max()
+            #     # result = result - result.min()
+            #     # result = result * 255 / result.max()
+            #     cpu = result.data.cpu()
+            #     input = cpu.numpy()
+            #     # input = input*255/input.max()
+            #     input = input-input.min()
+            #     input = input/input.max()
+            #     img = cv2.cvtColor(input, cv2.COLOR_GRAY2RGB)
+            #     # img = img - img.min()
+            #     # img = (img/img.max())*255
+            #
+            #     _WT = WT.data.cpu()
+            #     _WT = _WT.numpy()
+            #     _TC = TC.data.cpu().numpy()
+            #     _ET = ET.data.cpu().numpy()
+            #     mask_wt = np.zeros_like(_WT)
+            #     mask_wt = mask_wt.astype(np.float32)
+            #     mask_wt = cv2.cvtColor(mask_wt, cv2.COLOR_GRAY2RGB)
+            #
+            #     mask_wt[_WT == 1.0] = [60/255, 179/255, 113/255]
+            #     mask_wt[_TC == 1.0] = [205/255, 92/255, 92/255]
+            #     mask_wt[_ET == 1.0] = [238/255, 174/255, 14/255]
+            #
+            #     ret = cv2.addWeighted(img, 0.7, mask_wt, 0.3, 0)
+            #
+            #     return img, ret
+            #
+            # img_3, gg_3 = multiclass_project_T1_EC(input[0, 1, :, :, 80], target[0, :, :, :, 80])
+            # # image1, image1_label = multiclass_project_T1_EC(image1[0, :, :, 80, 1], target[0, :, :, :, 80])
+            # # image_hollow, hollow_lab = multiclass_project_T1_EC(image_hollow[0, :, :, 80, 1], target[0, :, :, :, 80])
+            # # image2, image2_lab = multiclass_project_T1_EC(image2[0, :, :, 80, 1], target[0, :, :, :, 80])
+            # # tumor2, tumor2_lab = multiclass_project_T1_EC(tumor2[0, :, :, 80, 1], target[0, :, :, :, 80])
+            # # fig = plt.figure()
+            # # a = fig.add_subplot(1, 2, 1)
+            # # imgplot = plt.imshow(img_3)
+            # # a.set_title('Before')
+            # #
+            # # a = fig.add_subplot(1, 2, 2)
+            # # imgplot = plt.imshow(gg_3)
+            # # imgplot.set_clim(0.0, 0.7)
+            # # a.set_title('After')
+            # # image1, image_hollow, image2, tumor2
+            # # fig = plt.gcf()
+            # # fig.set_size_inches(5, 5)
+            # # plt.imshow(image1)
+            # # plt.savefig(f'{pid}image1.png')
+            # # plt.show()
+            # #
+            # # fig = plt.gcf()
+            # # fig.set_size_inches(5, 5)
+            # # plt.imshow(image_hollow)
+            # # plt.savefig(f'{pid}image_hollow.png')
+            # # plt.show()
+            # #
+            # # fig = plt.gcf()
+            # # fig.set_size_inches(5, 5)
+            # # plt.imshow(image2)
+            # # plt.savefig(f'{pid}image2.png')
+            # # plt.show()
+            # #
+            # # fig = plt.gcf()
+            # # fig.set_size_inches(5, 5)
+            # # plt.imshow(tumor2)
+            # # plt.savefig(f'{pid}tumor2.png')
+            # # plt.show()
+            #
+            #
+            # fig = plt.gcf()
+            # fig.set_size_inches(5, 5)
+            # plt.imshow(img_3)
+            # plt.savefig(f'{pid}mixup.png')
+            # plt.show()
+            #
+            # fig = plt.gcf()
+            # fig.set_size_inches(5, 5)
+            # plt.imshow(gg_3)
+            # plt.savefig(f'{pid}mixup_label.png')
+            # plt.show()
+            #
+            # # fig = plt.gcf()
+            # # fig.set_size_inches(5, 5)
+            # # cv2.imwrite(f'{pid}.jpg', gg_3)
 
             output, loss, feature_maps = self._forward_pass(input, target, weight=None)
 
@@ -225,6 +322,7 @@ class UNet3DTrainer:
                 # visualize the feature map to tensorboard
                 board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
                 board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
+
                 if self.model_name == 'NNNet_Cae':
                     for i, t in enumerate(feature_maps):
                         board_add_image(self.writer, f'feature_map{i}', t, self.num_iterations)
@@ -232,6 +330,7 @@ class UNet3DTrainer:
 
                 # compute eval criterion
                 eval_score = self.eval_criterion(output, target)
+
                 # train_eval_scores.update(eval_score.item(), self._batch_size(input))
                 train_eval_scores_multi.update(eval_score, self._batch_size(input))
 
@@ -321,7 +420,7 @@ class UNet3DTrainer:
     def makePredictions(self, challenge_loader):
         # model is already loaded from disk by constructor
 
-        basePath = os.path.join(config['trainer']['checkpoint_dir'], "_iter{}".format(self.num_epoch))
+        basePath = os.path.join(config['trainer']['checkpoint_dir'], "epoch{}".format(self.num_epoch))
         if not os.path.exists(basePath):
             os.makedirs(basePath)
 
@@ -329,10 +428,20 @@ class UNet3DTrainer:
             for i, data in enumerate(challenge_loader):
                 inputs, pids, xOffset, yOffset, zOffset = data
                 print("processing {}".format(pids[0]))
-                inputs = inputs.to(config['device'])
+                inputs = inputs.to(self.device)
 
                 # predict labels and bring into required shape
                 outputs = self.model(inputs)
+                # TTA
+                outputs += self.model(inputs.flip(dims=(2,))).flip(dims=(2,))
+                outputs += self.model(inputs.flip(dims=(3,))).flip(dims=(3,))
+                outputs += self.model(inputs.flip(dims=(4,))).flip(dims=(4,))
+                outputs += self.model(inputs.flip(dims=(2, 3))).flip(dims=(2, 3))
+                outputs += self.model(inputs.flip(dims=(2, 4))).flip(dims=(2, 4))
+                outputs += self.model(inputs.flip(dims=(3, 4))).flip(dims=(3, 4))
+                outputs += self.model(inputs.flip(dims=(2, 3, 4))).flip(dims=(2, 3, 4))
+                outputs = outputs / 8.0  # mean
+
                 outputs = outputs[:, :, :, :, :155]
                 s = outputs.shape
                 fullsize = outputs.new_zeros((s[0], s[1], 240, 240, 155))
@@ -347,14 +456,20 @@ class UNet3DTrainer:
                 # binarize output
                 wt, tc, et = fullsize.chunk(3, dim=1)
                 s = fullsize.shape
-                wt = (wt > 0.6).view(s[2], s[3], s[4])
+                wt = (wt > 0.5).view(s[2], s[3], s[4])
                 tc = (tc > 0.5).view(s[2], s[3], s[4])
-                et = (et > 0.7).view(s[2], s[3], s[4])
+                et = (et > 0.5).view(s[2], s[3], s[4])
 
                 result = fullsize.new_zeros((s[2], s[3], s[4]), dtype=torch.uint8)
                 result[wt] = 2
                 result[tc] = 1
                 result[et] = 4
+
+
+
+                ET_voxels = (result == 4).sum()
+                if ET_voxels < 500:
+                    result[np.where(result == 4)] = 1
 
                 npResult = result.cpu().numpy()
                 max = npResult.max()

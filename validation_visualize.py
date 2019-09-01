@@ -25,7 +25,7 @@ model_path = config['trainer']['test_model']
 logger.info(f'Loading model from {model_path}...')
 utils.load_checkpoint(model_path, model)
 
-logger.info(f"Sending the model to '{config['device']}'")
+logger.info(f"Sending the model to '{config['default_device']}'")
 model = model.to('cuda:0')
 
 predictionsBasePath = config['loaders']['pred_path']
