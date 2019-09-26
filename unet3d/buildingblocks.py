@@ -3,7 +3,7 @@ from torch import nn as nn
 from torch.nn import functional as F
 from unet3d.config import load_config
 from torch.nn import init
-
+from .sync_batchnorm import SynchronizedBatchNorm3d
 
 # initalize the module
 def init_weights(net, init_type='normal'):
@@ -544,12 +544,12 @@ class EncoderModule(nn.Module):
         self.hasDropout = hasDropout
         self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
         # self.gn1 = nn.GroupNorm(groups, outChannels)
-        self.bn1 = nn.BatchNorm3d(outChannels)
+        self.bn1 = SynchronizedBatchNorm3d(outChannels)
         # self.in1 = nn.InstanceNorm3d(outChannels)
         if secondConv:
             self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
             # self.gn2 = nn.GroupNorm(groups, outChannels)
-            self.bn2 = nn.BatchNorm3d(outChannels)
+            self.bn2 = SynchronizedBatchNorm3d(outChannels)
             # self.in2 = nn.InstanceNorm3d(outChannels)
         if hasDropout:
             self.dropout = nn.Dropout3d(0.2, True)
@@ -560,7 +560,9 @@ class EncoderModule(nn.Module):
         doInplace = True and not self.hasDropout
         # x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=doInplace)
         # x = F.leaky_relu(self.bn1(self.conv1(x)), inplace=doInplace)
-        x = F.leaky_relu(self.bn1(self.conv1(x)), inplace=doInplace)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.leaky_relu(x)
         if self.hasDropout:
             x = self.dropout(x)
         if self.secondConv:
@@ -568,7 +570,6 @@ class EncoderModule(nn.Module):
             # x = F.leaky_relu(self.bn2(self.conv2(x)), inplace=doInplace)
             x = F.leaky_relu(self.bn2(self.conv2(x)), inplace=doInplace)
         return x
-
 
 # class DecoderModule(nn.Module):
 #     def __init__(self, inChannels, outChannels, upsample=False, firstConv=True):
@@ -603,11 +604,11 @@ class DecoderModule(nn.Module):
         if firstConv:
             self.conv1 = nn.Conv3d(inChannels, inChannels, 3, padding=1, bias=False)
             # self.gn1 = nn.GroupNorm(groups, inChannels)
-            self.bn1 = nn.BatchNorm3d(inChannels)
+            self.bn1 = SynchronizedBatchNorm3d(inChannels)
             # self.in1 = nn.InstanceNorm3d(inChannels)
         self.conv2 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
         # self.gn2 = nn.GroupNorm(groups, outChannels)
-        self.bn2 = nn.BatchNorm3d(outChannels)
+        self.bn2 = SynchronizedBatchNorm3d(outChannels)
         # self.in2 = nn.InstanceNorm3d(outChannels)
 
     def forward(self, x):
@@ -1120,3 +1121,229 @@ class MedicaNetBottleneck(nn.Module):
         out = self.relu(out)
 
         return out
+
+class PSPModule(nn.Module):
+    # (1, 2, 3, 6)
+    def __init__(self, sizes=(1, 3, 6, 8), dimension=3):
+        super(PSPModule, self).__init__()
+        self.stages = nn.ModuleList([self._make_stage(size, dimension) for size in sizes])
+
+    def _make_stage(self, size, dimension=3):
+        if dimension == 1:
+            prior = nn.AdaptiveAvgPool1d(output_size=size)
+        elif dimension == 2:
+            prior = nn.AdaptiveAvgPool2d(output_size=(size, size))
+        elif dimension == 3:
+            prior = nn.AdaptiveAvgPool3d(output_size=(size, size, size))
+        return prior
+
+    def forward(self, feats):
+        n, c, _, _ = feats.size()
+        priors = [stage(feats).view(n, c, -1) for stage in self.stages]
+        center = torch.cat(priors, -1)
+        return center
+
+
+class _SelfAttentionBlock(nn.Module):
+    '''
+    The basic implementation for self-attention block/non-local block
+    Input:
+        N X C X H X W
+    Parameters:
+        in_channels       : the dimension of the input feature map
+        key_channels      : the dimension after the key/query transform
+        value_channels    : the dimension after the value transform
+        scale             : choose the scale to downsample the input feature maps (save memory cost)
+    Return:
+        N X C X H X W
+        position-aware context features.(w/o concate or add with the input)
+    '''
+    def __init__(self, low_in_channels, high_in_channels, key_channels, value_channels, out_channels=None, scale=1, norm_type=None,psp_size=(1,3,6,8)):
+        super(_SelfAttentionBlock, self).__init__()
+        self.scale = scale
+        self.in_channels = low_in_channels
+        self.out_channels = out_channels
+        self.key_channels = key_channels
+        self.value_channels = value_channels
+        if out_channels == None:
+            self.out_channels = high_in_channels
+        self.pool = nn.MaxPool3d(kernel_size=(scale, scale))
+        self.f_key = nn.Sequential(
+            nn.Conv3d(in_channels=self.in_channels, out_channels=self.key_channels,
+                      kernel_size=1, stride=1, padding=0),
+            SynchronizedBatchNorm3d(self.key_channels),
+            nn.ReLU()
+        )
+        self.f_query = nn.Sequential(
+            nn.Conv3d(in_channels=high_in_channels, out_channels=self.key_channels,
+                      kernel_size=1, stride=1, padding=0),
+            SynchronizedBatchNorm3d(self.key_channels),
+            nn.ReLU()
+        )
+        self.f_value = nn.Conv3d(in_channels=self.in_channels, out_channels=self.value_channels,
+                                 kernel_size=1, stride=1, padding=0)
+        self.W = nn.Conv3d(in_channels=self.value_channels, out_channels=self.out_channels,
+                           kernel_size=1, stride=1, padding=0)
+
+        self.psp = PSPModule(psp_size)
+        nn.init.constant_(self.W.weight, 0)
+        nn.init.constant_(self.W.bias, 0)
+
+    def forward(self, low_feats, high_feats):
+        batch_size, h, w = high_feats.size(0), high_feats.size(2), high_feats.size(3)
+        # if self.scale > 1:
+        #     x = self.pool(x)
+
+        value = self.psp(self.f_value(low_feats))
+
+        query = self.f_query(high_feats).view(batch_size, self.key_channels, -1)
+        query = query.permute(0, 2, 1)
+        key = self.f_key(low_feats)
+        # value=self.psp(value)#.view(batch_size, self.value_channels, -1)
+        value = value.permute(0, 2, 1)
+        key = self.psp(key)  # .view(batch_size, self.key_channels, -1)
+        sim_map = torch.matmul(query, key)
+        sim_map = (self.key_channels ** -.5) * sim_map
+        sim_map = F.softmax(sim_map, dim=-1)
+
+        context = torch.matmul(sim_map, value)
+        context = context.permute(0, 2, 1).contiguous()
+        context = context.view(batch_size, self.value_channels, *high_feats.size()[2:])
+        context = self.W(context)
+        return context
+
+
+class SelfAttentionBlock3D(_SelfAttentionBlock):
+    def __init__(self, low_in_channels, high_in_channels, key_channels, value_channels, out_channels=None, scale=1, norm_type=None,psp_size=(1,3,6,8)):
+        super(SelfAttentionBlock3D, self).__init__(low_in_channels,
+                                                   high_in_channels,
+                                                   key_channels,
+                                                   value_channels,
+                                                   out_channels,
+                                                   scale,
+                                                   norm_type,
+                                                   psp_size=psp_size
+                                                   )
+
+
+class APNB(nn.Module):
+    """
+    Parameters:
+        in_features / out_features: the channels of the input / output feature maps.
+        dropout: we choose 0.05 as the default value.
+        size: you can apply multiple sizes. Here we only use one size.
+    Return:
+        features fused with Object context information.
+    """
+
+    def __init__(self, in_channels, out_channels, key_channels, value_channels, dropout, sizes=([1]), norm_type=None,psp_size=(1,3,6,8)):
+        super(APNB, self).__init__()
+        self.stages = []
+        self.norm_type = norm_type
+        self.psp_size=psp_size
+        self.stages = nn.ModuleList(
+            [self._make_stage(in_channels, out_channels, key_channels, value_channels, size) for size in sizes])
+        self.conv_bn_dropout = nn.Sequential(
+            nn.Conv2d(2 * in_channels, out_channels, kernel_size=1, padding=0),
+            SynchronizedBatchNorm3d(out_channels),
+            nn.ReLU(),
+            nn.Dropout3d(dropout)
+        )
+
+    def _make_stage(self, in_channels, output_channels, key_channels, value_channels, size):
+        return SelfAttentionBlock3D(in_channels,
+                                    key_channels,
+                                    value_channels,
+                                    output_channels,
+                                    size,
+                                    self.norm_type,
+                                    self.psp_size)
+
+    def forward(self, feats):
+        priors = [stage(feats) for stage in self.stages]
+        context = priors[0]
+        for i in range(1, len(priors)):
+            context += priors[i]
+        output = self.conv_bn_dropout(torch.cat([context, feats], 1))
+        return output
+
+
+class AFNB(nn.Module):
+    """
+    Parameters:
+        in_features / out_features: the channels of the input / output feature maps.
+        dropout: we choose 0.05 as the default value.
+        size: you can apply multiple sizes. Here we only use one size.
+    Return:
+        features fused with Object context information.
+    """
+
+    def __init__(self, low_in_channels, high_in_channels, out_channels, key_channels, value_channels, dropout,
+                 sizes=([1]), norm_type=None,psp_size=(1,3,6,8)):
+        super(AFNB, self).__init__()
+        self.stages = []
+        self.norm_type = norm_type
+        self.psp_size=psp_size
+        self.stages = nn.ModuleList(
+            [self._make_stage([low_in_channels, high_in_channels], out_channels, key_channels, value_channels, size) for
+             size in sizes])
+        self.conv_bn_dropout = nn.Sequential(
+            nn.Conv2d(out_channels + high_in_channels, out_channels, kernel_size=1, padding=0),
+            SynchronizedBatchNorm3d(out_channels),
+            nn.Dropout3d(dropout)
+        )
+
+    def _make_stage(self, in_channels, output_channels, key_channels, value_channels, size):
+        return SelfAttentionBlock3D(in_channels[0],
+                                    in_channels[1],
+                                    key_channels,
+                                    value_channels,
+                                    output_channels,
+                                    size,
+                                    self.norm_type,
+                                    psp_size=self.psp_size)
+
+    def forward(self, low_feats, high_feats):
+        priors = [stage(low_feats, high_feats) for stage in self.stages]
+        context = priors[0]
+        for i in range(1, len(priors)):
+            context += priors[i]
+        output = self.conv_bn_dropout(torch.cat([context, high_feats], 1))
+        return output
+
+
+class asymmetric_non_local_network(nn.Sequential):
+    def __init__(self, configer):
+        super(asymmetric_non_local_network, self).__init__()
+        self.configer = configer
+        self.num_classes = self.configer.get('data', 'num_classes')
+        self.backbone = Hello
+        # low_in_channels, high_in_channels, out_channels, key_channels, value_channels, dropout
+        self.fusion = AFNB(1024, 2048, 2048, 256, 256, dropout=0.05, sizes=([1]),
+                           norm_type=self.configer.get('network', 'norm_type'))
+        # extra added layers
+        self.context = nn.Sequential(
+            nn.Conv3d(2048, 512, kernel_size=3, stride=1, padding=1),
+            SynchronizedBatchNorm3d(512),
+            nn.ReLU(),
+            APNB(in_channels=512, out_channels=512, key_channels=256, value_channels=256,
+                 dropout=0.05, sizes=([1]), norm_type=self.configer.get('network', 'norm_type'))
+        )
+        self.cls = nn.Conv3d(512, self.num_classes, kernel_size=1, stride=1, padding=0, bias=True)
+        self.dsn = nn.Sequential(
+            nn.Conv3d(1024, 512, kernel_size=3, stride=1, padding=1),
+            SynchronizedBatchNorm3d(512),
+            nn.ReLU(),
+            nn.Dropout2d(0.05),
+            nn.Conv3d(512, self.num_classes, kernel_size=1, stride=1, padding=0, bias=True)
+        )
+
+    def forward(self, x_):
+        x = self.backbone(x_)
+        aux_x = self.dsn(x[-2])
+        x = self.fusion(x[-2], x[-1])
+        x = self.context(x)
+        x = self.cls(x)
+        aux_x = F.interpolate(aux_x, size=(x_.size(2), x_.size(3), x_.size(4)), mode="trilinear", align_corners=True)
+        x = F.interpolate(x, size=(x_.size(2), x_.size(3), x_.size(4)), mode="trilinear", align_corners=True)
+        return aux_x, x

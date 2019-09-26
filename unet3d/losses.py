@@ -69,9 +69,17 @@ class BratsDiceLoss(nn.Module):
         etMask = etMask.view(s[0], s[2], s[3], s[4])
 
         # calculate losses
-        wtLoss = self.weightedDiceLoss(wt, wtMask, mean=0.01)
-        tcLoss = self.weightedDiceLoss(tc, tcMask, mean=0.01)
-        etLoss = self.weightedDiceLoss(et, etMask, mean=0.01)
+        wt_mean = float((wtMask != 0).sum()) / float((wtMask == 0).sum())
+        wt_mean = round(wt_mean, 2)
+        wtLoss = self.weightedDiceLoss(wt, wtMask, mean=wt_mean)
+
+        tc_mean = float((tcMask != 0).sum()) / float((tcMask == 0).sum())
+        tc_mean = round(tc_mean, 2)
+        tcLoss = self.weightedDiceLoss(tc, tcMask, mean=tc_mean)
+
+        et_mean = float((etMask != 0).sum()) / float((etMask == 0).sum())
+        et_mean = round(et_mean, 2)
+        etLoss = self.weightedDiceLoss(et, etMask, mean=et_mean)
 
         return (wtLoss + tcLoss + etLoss) / 5
 
@@ -81,7 +89,10 @@ class BratsDiceLoss(nn.Module):
     def weightedDiceLoss(self, pred, target, smoothing=1, mean=0.01):
 
         mean = mean
-        w_1 = 1 / mean ** 2
+        try:
+            w_1 = 1 / mean ** 2
+        except:
+            w_1 = 1
         w_0 = 1 / (1 - mean) ** 2
 
         pred_1 = pred
@@ -480,6 +491,18 @@ class CaeLoss(nn.Module):
         return dice_loss + cae_loss + boundary_loss
 
 
+class GraphDiceLoss(nn.Module):
+    def __init__(self):
+        super(GraphDiceLoss, self).__init__()
+        self.dice_loss = BratsDiceLoss()
+
+    def forward(self, pred, x_, graph, label):
+        dice_loss = self.dice_loss(pred, label)
+        distance_loss = -0.001*torch.dist(x_, graph)
+        return dice_loss + distance_loss
+
+
+
 class GeneralizedDiceLoss(nn.Module):
     """Computes Generalized Dice Loss (GDL) as described in https://arxiv.org/pdf/1707.03237.pdf
     """
@@ -799,6 +822,8 @@ def get_loss_criterion(config):
         return bratsMixedLoss()
     elif name == 'CaeLoss':
         return CaeLoss()
+    elif name == 'GraphDiceLoss':
+        return GraphDiceLoss()
     else:
         raise RuntimeError(f"Unsupported loss function: '{name}'. Supported losses: {SUPPORTED_LOSSES}")
 

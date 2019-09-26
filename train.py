@@ -93,11 +93,11 @@ def _create_lr_scheduler(config, optimizer):
 
 
 def main():
-    # Create main logger
-    logger = get_logger('UNet3DTrainer')
-
     # Load and log experiment configuration
     config = load_config()
+
+    # Create main logger
+    logger = get_logger('UNet3DTrainer', file_name=config['trainer']['checkpoint_dir'])
     logger.info(config)
 
     os.environ['CUDA_VISIBLE_DEVICES'] = config['default_device']

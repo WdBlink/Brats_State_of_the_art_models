@@ -5,7 +5,7 @@ default_device: 0,1
 # model configuration
 model:
   # model class
-  name: DMFNet
+  name: NoNewNet
   # number of input channels to the model
   in_channels: 4
   # number of output channels
@@ -21,19 +21,19 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/OriginalTumorMixUp_pretrain_DMFNet_BN_Adam_batchsize=4_lr=0.0001/
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/MixupAlpha0.2Beta0.2_dataaug=True_NoNewNet_BN_Adam_batchsize=2_lr=0.0001/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # fine-tune a given pre-trained model
-  pre_trained: /home/server/github/pytorch-3dunet/checkpoints/OriginalTumorMixUp_pretrain_DMFNet_BN_Adam_batchsize=4_lr=0.0001/last_checkpoint.pytorch
+  pre_trained: null
   # output test result model
   test_model: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint3.pytorch
   # how many iterations between validations
-  validate_after_iters: 100
+  validate_after_iters: 400
   # how many iterations between tensorboard logging
-  log_after_iters: 100
+  log_after_iters: 400
   # max number of epochs
-  epochs: 200
+  epochs: 100
   # max number of iterations
   iters: 100000
   # model with higher eval score is considered better
@@ -51,7 +51,7 @@ optimizer:
 # loss function configuration
 loss:
   # loss function to be used during training
-  name: DiceLoss_SurfaceLoss
+  name: BratsDiceLoss
   # A manual rescaling weight given to each class.
   loss_weight: null
   # a target value that is ignored and does not contribute to the input gradient
@@ -76,11 +76,13 @@ lr_scheduler:
 # data loaders configuration
 loaders:
   # batch size
-  batch_size: 4
+  batch_size: 2
   # if use Mix Up
-  mixup: True
+  mixup: False
   # if use data augment
-  data_aug: False
+  data_aug: True
+  # if use template brain
+  graph_brain: False
   # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
   train_patch: [32, 64, 64]
   # train stride between patches
@@ -95,7 +97,7 @@ loaders:
   label_internal_path: label
   # paths to the training datasets
   train_path:
-    - '/home/server/BraTS19_preprocessing/training/challenge/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
+    - '/home/server/BraTS19_preprocessing/training/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
   # paths to the validation datasets
   val_path:
     - '/home/server/BraTS19_preprocessing/training/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'

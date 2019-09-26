@@ -1,4 +1,3 @@
-import logging
 import os
 
 import numpy as np
@@ -74,6 +73,7 @@ class UNet3DTrainer:
         self.log_after_iters = log_after_iters
         self.validate_iters = validate_iters
         self.eval_score_higher_is_better = eval_score_higher_is_better
+        self.use_graph_brain = config['loaders']['graph_brain']
         logger.info(f'eval_score_higher_is_better: {eval_score_higher_is_better}')
 
         if best_eval_score is not None:
@@ -106,7 +106,7 @@ class UNet3DTrainer:
         checkpoint_dir = os.path.split(checkpoint_path)[0]
         return cls(model, optimizer, lr_scheduler,
                    loss_criterion, eval_criterion,
-                   torch.device(state['device']),
+                   torch.device(0),
                    loaders, checkpoint_dir,
                    eval_score_higher_is_better=state['eval_score_higher_is_better'],
                    best_eval_score=state['best_eval_score'],
@@ -170,113 +170,23 @@ class UNet3DTrainer:
         train_losses = utils.RunningAverage()
         train_eval_scores_multi = utils.RunningAverageMulti()
 
+        # self.logger.info('make challenge pred')
+        # self.makePredictions(self.loaders['challenge'])
+
         # sets the model in training mode
         self.model.train()
-
         for i, t in enumerate(tqdm(train_loader)):
 
-            print(
+            self.logger.info(
                 f'Training iteration {self.num_iterations}. '
                 f'Batch {i}. '
                 f'Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
-
-            input, pid, target = self._split_training_batch(t)
-
-            # def multiclass_project_T1_EC(result, mask):
-            #     # result shape [H,w]
-            #     # mask shape [H,w]
-            #     # return shape [H,W,3]
-            #     WT = mask[0, ...]
-            #     TC = mask[1, ...]
-            #     ET = mask[2, ...]
-            #
-            #     # result = result.copy()
-            #     # result = result.astype(np.float32)
-            #     # result = result / result.max()
-            #     # result = result - result.min()
-            #     # result = result * 255 / result.max()
-            #     cpu = result.data.cpu()
-            #     input = cpu.numpy()
-            #     # input = input*255/input.max()
-            #     input = input-input.min()
-            #     input = input/input.max()
-            #     img = cv2.cvtColor(input, cv2.COLOR_GRAY2RGB)
-            #     # img = img - img.min()
-            #     # img = (img/img.max())*255
-            #
-            #     _WT = WT.data.cpu()
-            #     _WT = _WT.numpy()
-            #     _TC = TC.data.cpu().numpy()
-            #     _ET = ET.data.cpu().numpy()
-            #     mask_wt = np.zeros_like(_WT)
-            #     mask_wt = mask_wt.astype(np.float32)
-            #     mask_wt = cv2.cvtColor(mask_wt, cv2.COLOR_GRAY2RGB)
-            #
-            #     mask_wt[_WT == 1.0] = [60/255, 179/255, 113/255]
-            #     mask_wt[_TC == 1.0] = [205/255, 92/255, 92/255]
-            #     mask_wt[_ET == 1.0] = [238/255, 174/255, 14/255]
-            #
-            #     ret = cv2.addWeighted(img, 0.7, mask_wt, 0.3, 0)
-            #
-            #     return img, ret
-            #
-            # img_3, gg_3 = multiclass_project_T1_EC(input[0, 1, :, :, 80], target[0, :, :, :, 80])
-            # # image1, image1_label = multiclass_project_T1_EC(image1[0, :, :, 80, 1], target[0, :, :, :, 80])
-            # # image_hollow, hollow_lab = multiclass_project_T1_EC(image_hollow[0, :, :, 80, 1], target[0, :, :, :, 80])
-            # # image2, image2_lab = multiclass_project_T1_EC(image2[0, :, :, 80, 1], target[0, :, :, :, 80])
-            # # tumor2, tumor2_lab = multiclass_project_T1_EC(tumor2[0, :, :, 80, 1], target[0, :, :, :, 80])
-            # # fig = plt.figure()
-            # # a = fig.add_subplot(1, 2, 1)
-            # # imgplot = plt.imshow(img_3)
-            # # a.set_title('Before')
-            # #
-            # # a = fig.add_subplot(1, 2, 2)
-            # # imgplot = plt.imshow(gg_3)
-            # # imgplot.set_clim(0.0, 0.7)
-            # # a.set_title('After')
-            # # image1, image_hollow, image2, tumor2
-            # # fig = plt.gcf()
-            # # fig.set_size_inches(5, 5)
-            # # plt.imshow(image1)
-            # # plt.savefig(f'{pid}image1.png')
-            # # plt.show()
-            # #
-            # # fig = plt.gcf()
-            # # fig.set_size_inches(5, 5)
-            # # plt.imshow(image_hollow)
-            # # plt.savefig(f'{pid}image_hollow.png')
-            # # plt.show()
-            # #
-            # # fig = plt.gcf()
-            # # fig.set_size_inches(5, 5)
-            # # plt.imshow(image2)
-            # # plt.savefig(f'{pid}image2.png')
-            # # plt.show()
-            # #
-            # # fig = plt.gcf()
-            # # fig.set_size_inches(5, 5)
-            # # plt.imshow(tumor2)
-            # # plt.savefig(f'{pid}tumor2.png')
-            # # plt.show()
-            #
-            #
-            # fig = plt.gcf()
-            # fig.set_size_inches(5, 5)
-            # plt.imshow(img_3)
-            # plt.savefig(f'{pid}mixup.png')
-            # plt.show()
-            #
-            # fig = plt.gcf()
-            # fig.set_size_inches(5, 5)
-            # plt.imshow(gg_3)
-            # plt.savefig(f'{pid}mixup_label.png')
-            # plt.show()
-            #
-            # # fig = plt.gcf()
-            # # fig.set_size_inches(5, 5)
-            # # cv2.imwrite(f'{pid}.jpg', gg_3)
-
-            output, loss, feature_maps = self._forward_pass(input, target, weight=None)
+            if self.use_graph_brain:
+                input, pid, target, graph_brain = self._split_training_batch(t)
+                output, loss, feature_maps = self._forward_pass(input, target, graph_brain, weight=None)
+            else:
+                input, pid, target = self._split_training_batch(t)
+                output, loss, feature_maps = self._forward_pass(input, target, weight=None)
 
             # output_sample = output[0, 1, :, :, 80].cpu().detach().numpy()
             # self.draw_picture(output_sample)
@@ -288,30 +198,26 @@ class UNet3DTrainer:
             loss.backward()
             self.optimizer.step()
 
-            if self.num_iterations % self.validate_after_iters == 0:
-                # evaluate on validation set
-                eval_score = self.validate(self.loaders['val'])
-                # adjust learning rate if necessary
-                # if isinstance(self.scheduler, ReduceLROnPlateau):
-                    # self.scheduler.step(eval_score)
-                if self.scheduler is None:
-                    pass
-                else:
-                    self.scheduler.step()
-                    # pass
-
-                # log current learning rate in tensorboard
-                self._log_lr()
-
-                # remember best validation metric
-                is_best = self._is_best_eval_score(eval_score)
-
-                # save checkpoint
-                self._save_checkpoint(is_best)
-
-                # make challenge predict
-                # if is_best:
-                #     self.makePredictions(self.loaders['challenge'])
+            # if self.num_iterations % self.validate_after_iters == 0:
+            #     # evaluate on validation set
+            #     eval_score = self.validate(self.loaders['val'])
+            #     # adjust learning rate if necessary
+            #     # if isinstance(self.scheduler, ReduceLROnPlateau):
+            #         # self.scheduler.step(eval_score)
+            #     if self.scheduler is None:
+            #         pass
+            #     else:
+            #         self.scheduler.step()
+            #         # pass
+            #
+            #     # log current learning rate in tensorboard
+            #     self._log_lr()
+            #
+            #     # remember best validation metric
+            #     is_best = self._is_best_eval_score(eval_score)
+            #
+            #     # save checkpoint
+            #     self._save_checkpoint(is_best)
 
             if self.num_iterations % self.log_after_iters == 0:
                 # if model contains final_activation layer for normalizing logits apply it, otherwise both
@@ -320,10 +226,14 @@ class UNet3DTrainer:
                     output = self.model.final_activation(output)
 
                 # visualize the feature map to tensorboard
-                board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
+                board_list = [input[0:1, 1:4, :, :, input.size(4)//2], output[0:1, :, :, :, output.size(4)//2],
+                              target[0:1, :, :, :, target.size(4)//2]]
                 board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
 
                 if self.model_name == 'NNNet_Cae':
+                    for i, t in enumerate(feature_maps):
+                        board_add_image(self.writer, f'feature_map{i}', t, self.num_iterations)
+                if self.model_name == 'FeatureMinusNet':
                     for i, t in enumerate(feature_maps):
                         board_add_image(self.writer, f'feature_map{i}', t, self.num_iterations)
                     # board_add_images(self.writer, 'feature_map', feature_maps, self.num_iterations)
@@ -336,11 +246,11 @@ class UNet3DTrainer:
 
                 # log stats, params and images
                 self.logger.info(
-                    f'Training stats.\n'
-                    f'Loss: {train_losses.avg}. \n'
-                    f'Evaluation score WT:{train_eval_scores_multi.dice_WT}, \n'
-                    f'TC:{train_eval_scores_multi.dice_TC}, \n'
-                    f'ET:{train_eval_scores_multi.dice_ET}')
+                    f'*********Training stats.*********\n'
+                    f'Train_Loss: {train_losses.avg}. \n'
+                    f'Train_WT:{train_eval_scores_multi.dice_WT}, \n'
+                    f'Train_TC:{train_eval_scores_multi.dice_TC}, \n'
+                    f'Train_ET:{train_eval_scores_multi.dice_ET}')
                 self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.dice_WT,
                                       train_eval_scores_multi.dice_TC, train_eval_scores_multi.dice_ET,
                                       train_eval_scores_multi.sens_WT, train_eval_scores_multi.sens_TC,
@@ -357,7 +267,25 @@ class UNet3DTrainer:
             self.num_iterations += config['loaders']['batch_size']
 
         self.logger.info('make challenge pred')
-        self.makePredictions(self.loaders['challenge'])
+        # self.makePredictions(self.loaders['challenge'])
+
+        # evaluate on validation set
+        self.logger.info('make validation')
+        eval_score = self.validate(self.loaders['val'])
+        # adjust learning rate if necessary
+        # if isinstance(self.scheduler, ReduceLROnPlateau):
+        # self.scheduler.step(eval_score)
+        if self.scheduler is None:
+            pass
+        else:
+            self.scheduler.step()
+        # log current learning rate in tensorboard
+        self._log_lr()
+        # remember best validation metric
+        is_best = self._is_best_eval_score(eval_score)
+        # save checkpoint
+        self._save_checkpoint(is_best)
+
         return False
 
     def validate(self, val_loader):
@@ -374,16 +302,124 @@ class UNet3DTrainer:
                 for i, t in enumerate(val_loader):
                     self.logger.info(f'Validation iteration {i}')
 
-                    input, pid, target = self._split_training_batch(t)
+                    if self.use_graph_brain:
+                        input, pid, target, graph_brain = self._split_training_batch(t)
+                        output, loss, feature_maps = self._forward_pass(input, target, graph_brain, mode='val', weight=None)
+                    else:
+                        input, pid, target = self._split_training_batch(t)
+                        output, loss, feature_maps = self._forward_pass(input, target, weight=None)
 
-                    output, loss, feature_map = self._forward_pass(input, target, mode='val', weight=None)
                     val_losses.update(loss.item(), self._batch_size(input))
 
                     eval_score = self.eval_criterion(output, target)
 
+                    def multiclass_project_T1_EC(result, mask):
+                        # result shape [H,w]
+                        # mask shape [H,w]
+                        # return shape [H,W,3]
+                        WT = mask[0, ...]
+                        TC = mask[1, ...]
+                        ET = mask[2, ...]
+
+                        # result = result.copy()
+                        # result = result.astype(np.float32)
+                        # result = result / result.max()
+                        # result = result - result.min()
+                        # result = result * 255 / result.max()
+                        cpu = result.data.cpu()
+                        input = cpu.numpy()
+                        # input = input*255/input.max()
+                        input = input - input.min()
+                        input = input / input.max()
+                        img = cv2.cvtColor(input, cv2.COLOR_GRAY2RGB)
+                        # img = img - img.min()
+                        # img = (img/img.max())*255
+
+                        _WT = WT.data.cpu()
+                        _WT = _WT.numpy()
+                        _TC = TC.data.cpu().numpy()
+                        _ET = ET.data.cpu().numpy()
+                        mask_wt = np.zeros_like(_WT)
+                        mask_wt = mask_wt.astype(np.float32)
+                        mask_wt = cv2.cvtColor(mask_wt, cv2.COLOR_GRAY2RGB)
+
+                        mask_wt[_WT == 1.0] = [60 / 255, 179 / 255, 113 / 255]
+                        mask_wt[_TC == 1.0] = [205 / 255, 92 / 255, 92 / 255]
+                        mask_wt[_ET == 1.0] = [238 / 255, 174 / 255, 14 / 255]
+
+                        ret = cv2.addWeighted(img, 0.7, mask_wt, 0.3, 0)
+
+                        return img, ret
+
                     # print the bad guy
                     if eval_score[0] < 0.5:
-                        self.logger.info(f'The patient {pid} score is {eval_score}!!!')
+                        wt_gt = (target[:, 0, ...] == 1).sum()
+                        tc_gt = (target[:, 1, ...] == 1).sum()
+                        et_gt = (target[:, 2, ...] == 1).sum()
+
+                        wt_pred = (output[:, 0, ...] >= 0.5).sum()
+                        tc_pred = (output[:, 1, ...] >= 0.5).sum()
+                        et_pred = (output[:, 2, ...] >= 0.5).sum()
+                        self.logger.info(f'The patient {pid} score is {eval_score}!!!\n'
+                                         f'The pixel of WT_GT|WT_OUT is {wt_gt}|{wt_pred}\n'
+                                         f'The pixel of TC_GT|TC_OUT is {tc_gt}|{tc_pred}\n'
+                                         f'The pixel of ET_GT|ET_OUT is {et_gt}|{et_pred}\n')
+
+                        img_3, gg_3 = multiclass_project_T1_EC(input[0, 1, :, :, input.size(4)//2], target[0, :, :, :, target.size(4)//2])
+                        # image1, image1_label = multiclass_project_T1_EC(image1[0, :, :, 80, 1], target[0, :, :, :, 80])
+                        # image_hollow, hollow_lab = multiclass_project_T1_EC(image_hollow[0, :, :, 80, 1], target[0, :, :, :, 80])
+                        # image2, image2_lab = multiclass_project_T1_EC(image2[0, :, :, 80, 1], target[0, :, :, :, 80])
+                        # tumor2, tumor2_lab = multiclass_project_T1_EC(tumor2[0, :, :, 80, 1], target[0, :, :, :, 80])
+                        # fig = plt.figure()
+                        # a = fig.add_subplot(1, 2, 1)
+                        # imgplot = plt.imshow(img_3)
+                        # a.set_title('Before')
+                        #
+                        # a = fig.add_subplot(1, 2, 2)
+                        # imgplot = plt.imshow(gg_3)
+                        # imgplot.set_clim(0.0, 0.7)
+                        # a.set_title('After')
+                        # image1, image_hollow, image2, tumor2
+                        # fig = plt.gcf()
+                        # fig.set_size_inches(5, 5)
+                        # plt.imshow(image1)
+                        # plt.savefig(f'{pid}image1.png')
+                        # plt.show()
+                        #
+                        # fig = plt.gcf()
+                        # fig.set_size_inches(5, 5)
+                        # plt.imshow(image_hollow)
+                        # plt.savefig(f'{pid}image_hollow.png')
+                        # plt.show()
+                        #
+                        # fig = plt.gcf()
+                        # fig.set_size_inches(5, 5)
+                        # plt.imshow(image2)
+                        # plt.savefig(f'{pid}image2.png')
+                        # plt.show()
+                        #
+                        # fig = plt.gcf()
+                        # fig.set_size_inches(5, 5)
+                        # plt.imshow(tumor2)
+                        # plt.savefig(f'{pid}tumor2.png')
+                        # plt.show()
+
+
+                        fig = plt.gcf()
+                        fig.set_size_inches(5, 5)
+                        plt.imshow(img_3)
+                        plt.savefig(f'{pid}_img.png')
+                        plt.show()
+
+                        fig = plt.gcf()
+                        fig.set_size_inches(5, 5)
+                        plt.imshow(gg_3)
+                        plt.savefig(f'{pid}_label.png')
+                        plt.show()
+
+                        # fig = plt.gcf()
+                        # fig.set_size_inches(5, 5)
+                        # cv2.imwrite(f'{pid}.jpg', gg_3)
 
                     # val_scores.update(eval_score.item(), self._batch_size(input))
                     val_scores_multi.update(eval_score, self._batch_size(input))
@@ -402,15 +438,15 @@ class UNet3DTrainer:
                                       val_scores_multi.dice_WT, val_scores_multi.dice_TC, val_scores_multi.dice_ET,
                                       val_scores_multi.sens_WT, val_scores_multi.sens_TC, val_scores_multi.sens_ET)
                 # self.logger.info(f'Validation finished. Loss: {val_losses.avg}. Evaluation score: {val_scores.avg}')
-                self.logger.info(f'Validation finished. \n'
-                                 f'Loss: {val_losses.avg} \n'
+                self.logger.info(f'*********Validation finished.********* \n'
+                                 f'Val_Loss: {val_losses.avg} \n'
                                  f'Evaluation score \n'
-                                 f'WT:{val_scores_multi.dice_WT}\n'
-                                 f'TC:{val_scores_multi.dice_TC} \n'
-                                 f'ET:{val_scores_multi.dice_ET} \n'
-                                 f'sensitivity WT:{val_scores_multi.sens_WT}\n'
-                                 f'sensitivity TC:{val_scores_multi.sens_TC}\n'
-                                 f'sensitivity ET:{val_scores_multi.sens_ET}')
+                                 f'Val_WT:{val_scores_multi.dice_WT}\n'
+                                 f'Val_TC:{val_scores_multi.dice_TC} \n'
+                                 f'Val_ET:{val_scores_multi.dice_ET} \n'
+                                 f'Val_sensitivity_WT:{val_scores_multi.sens_WT}\n'
+                                 f'Val_sensitivity_TC:{val_scores_multi.sens_TC}\n'
+                                 f'Val_sensitivity_ET:{val_scores_multi.sens_ET}')
 
                 return val_scores_multi.dice_WT
         finally:
@@ -420,27 +456,62 @@ class UNet3DTrainer:
     def makePredictions(self, challenge_loader):
         # model is already loaded from disk by constructor
 
-        basePath = os.path.join(config['trainer']['checkpoint_dir'], "epoch{}".format(self.num_epoch))
+        basePath = os.path.join(config['trainer']['checkpoint_dir'], "epoch{}".format(self.num_epoch+1))
         if not os.path.exists(basePath):
             os.makedirs(basePath)
 
-        with torch.no_grad():
-            for i, data in enumerate(challenge_loader):
-                inputs, pids, xOffset, yOffset, zOffset = data
-                print("processing {}".format(pids[0]))
-                inputs = inputs.to(self.device)
+        # save checkpoint
+        # self._save_checkpoint(False)
 
-                # predict labels and bring into required shape
-                outputs = self.model(inputs)
-                # TTA
-                outputs += self.model(inputs.flip(dims=(2,))).flip(dims=(2,))
-                outputs += self.model(inputs.flip(dims=(3,))).flip(dims=(3,))
-                outputs += self.model(inputs.flip(dims=(4,))).flip(dims=(4,))
-                outputs += self.model(inputs.flip(dims=(2, 3))).flip(dims=(2, 3))
-                outputs += self.model(inputs.flip(dims=(2, 4))).flip(dims=(2, 4))
-                outputs += self.model(inputs.flip(dims=(3, 4))).flip(dims=(3, 4))
-                outputs += self.model(inputs.flip(dims=(2, 3, 4))).flip(dims=(2, 3, 4))
-                outputs = outputs / 8.0  # mean
+        with torch.no_grad():
+            for i, data in enumerate(tqdm(challenge_loader)):
+                if self.use_graph_brain:
+                    inputs, pids, xOffset, yOffset, zOffset, graph_brain = data
+                    print("processing {}".format(pids[0]))
+                    inputs = inputs.to(1)
+                    graph_brain = graph_brain.to(1)
+                    if self.model_name == 'DistanceNoNewNet' or 'FeatureSelectNet':
+                        # predict labels and bring into required shape
+                        outputs = self.model(inputs, graph_brain)
+                        outputs = outputs[0]
+                        # TTA
+                        outputs += self.model(inputs.flip(dims=(2,)), graph_brain.flip(dims=(2,)))[0].flip(dims=(2,))
+                        outputs += self.model(inputs.flip(dims=(3,)), graph_brain.flip(dims=(3,)))[0].flip(dims=(3,))
+                        outputs += self.model(inputs.flip(dims=(4,)), graph_brain.flip(dims=(4,)))[0].flip(dims=(4,))
+                        outputs += self.model(inputs.flip(dims=(2, 3)), graph_brain.flip(dims=(2, 3)))[0].flip(dims=(2, 3))
+                        outputs += self.model(inputs.flip(dims=(2, 4)), graph_brain.flip(dims=(2, 4)))[0].flip(dims=(2, 4))
+                        outputs += self.model(inputs.flip(dims=(3, 4)), graph_brain.flip(dims=(3, 4)))[0].flip(dims=(3, 4))
+                        outputs += self.model(inputs.flip(dims=(2, 3, 4)), graph_brain.flip(dims=(2, 3, 4)))[0].flip(
+                            dims=(2, 3, 4))
+                        outputs = outputs / 8.0  # mean
+                    else:
+                        # predict labels and bring into required shape
+                        outputs = self.model(inputs)
+                        # TTA
+                        outputs += self.model(inputs.flip(dims=(2,))).flip(dims=(2,))
+                        outputs += self.model(inputs.flip(dims=(3,))).flip(dims=(3,))
+                        outputs += self.model(inputs.flip(dims=(4,))).flip(dims=(4,))
+                        outputs += self.model(inputs.flip(dims=(2, 3))).flip(dims=(2, 3))
+                        outputs += self.model(inputs.flip(dims=(2, 4))).flip(dims=(2, 4))
+                        outputs += self.model(inputs.flip(dims=(3, 4))).flip(dims=(3, 4))
+                        outputs += self.model(inputs.flip(dims=(2, 3, 4))).flip(dims=(2, 3, 4))
+                        outputs = outputs / 8.0  # mean
+                else:
+                    inputs, pids, xOffset, yOffset, zOffset = data
+                    print("processing {}".format(pids[0]))
+                    inputs = inputs.to(1)
+
+                    # predict labels and bring into required shape
+                    outputs = self.model(inputs)
+                    # TTA
+                    outputs += self.model(inputs.flip(dims=(2,))).flip(dims=(2,))
+                    outputs += self.model(inputs.flip(dims=(3,))).flip(dims=(3,))
+                    outputs += self.model(inputs.flip(dims=(4,))).flip(dims=(4,))
+                    outputs += self.model(inputs.flip(dims=(2, 3))).flip(dims=(2, 3))
+                    outputs += self.model(inputs.flip(dims=(2, 4))).flip(dims=(2, 4))
+                    outputs += self.model(inputs.flip(dims=(3, 4))).flip(dims=(3, 4))
+                    outputs += self.model(inputs.flip(dims=(2, 3, 4))).flip(dims=(2, 3, 4))
+                    outputs = outputs / 8.0  # mean
 
                 outputs = outputs[:, :, :, :, :155]
                 s = outputs.shape
@@ -452,6 +523,13 @@ class UNet3DTrainer:
                 if zOffset + s[4] > 155:
                     outputs = outputs[:, :, :, :, :155 - zOffset]
                 fullsize[:, :, xOffset:xOffset + s[2], yOffset:yOffset + s[3], zOffset:zOffset + s[4]] = outputs
+
+                # npFullsize = fullsize.cpu().numpy()
+                # fs_path = os.path.join(config['trainer']['checkpoint_dir'], "epoch{}".format(self.num_epoch+1), 'fullsize')
+                # if not os.path.exists(fs_path):
+                #     os.makedirs(fs_path)
+                # path = os.path.join(fs_path, "{}.nii.gz".format(pids[0]))
+                # utils.save_nii(path, npFullsize, None, None)
 
                 # binarize output
                 wt, tc, et = fullsize.chunk(3, dim=1)
@@ -465,15 +543,12 @@ class UNet3DTrainer:
                 result[tc] = 1
                 result[et] = 4
 
-
-
-                ET_voxels = (result == 4).sum()
-                if ET_voxels < 500:
-                    result[np.where(result == 4)] = 1
-
                 npResult = result.cpu().numpy()
-                max = npResult.max()
-                min = npResult.min()
+                ET_voxels = (npResult == 4).sum()
+                if ET_voxels < 500:
+                    # torch.where(result == 4, result, torch.ones_like(result))
+                    npResult[np.where(npResult == 4)] = 1
+
                 path = os.path.join(basePath, "{}.nii.gz".format(pids[0]))
                 utils.save_nii(path, npResult, None, None)
 
@@ -482,7 +557,6 @@ class UNet3DTrainer:
     def _split_training_batch(self, t):
         def _move_to_device(input):
             if isinstance(input, tuple) or isinstance(input, list):
-
                 return tuple([_move_to_device(input[0]), input[1], _move_to_device(input[2])])
             else:
                 return input.to(self.device, dtype=torch.float)
@@ -490,13 +564,20 @@ class UNet3DTrainer:
         t = _move_to_device(t)
         if len(t) == 2:
             input, target = t
-        else:
+            return input, target
+        elif len(t) == 3:
             input, pid, target = t
-        return input, pid, target
+            return input, pid, target
+        elif len(t) == 4:
+            input, pid, target, graph_brain = t
+            return input, pid, target, graph_brain
 
-    def _forward_pass(self, input, target, mode='train', weight=None):
+    def _forward_pass(self, input, target, graph_brain=None, mode='train', weight=None):
         # forward pass
-        output = self.model(input)
+        if graph_brain is not None:
+            output = self.model(input, graph_brain)
+        else:
+            output = self.model(input)
         feature_maps = []
         # compute the loss
         if self.model_name == 'NNNet_Vae':
@@ -512,6 +593,15 @@ class UNet3DTrainer:
                     t = torch.sum(t, dim=1, keepdim=True)//channel
                     feature_maps.append(t[:, :, :, :, size//2])
                 feature_maps.append(cae_out[:, :, :, :, cae_out.size(4)//2])
+            output = output[0]
+        elif self.model_name == 'FeatureMinusNet':
+            loss = self.loss_criterion(output[0], target)
+            if mode == 'train':
+                cae_out = output[1]
+                feature_maps.append(cae_out[:, :, :, :, cae_out.size(4)//2])
+            output = output[0]
+        elif self.model_name == 'DistanceNoNewNet':
+            loss = self.loss_criterion(output[0], output[1], output[2], target)
             output = output[0]
         else:
             if weight is None:

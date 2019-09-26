@@ -13,6 +13,7 @@ import BraTS
 from unet3d.utils import get_logger
 from unet3d.losses import expand_as_one_hot
 import preprocess.augmentation as aug
+from dataProcessing.utils import load_nii
 
 
 class SliceBuilder:
@@ -114,7 +115,8 @@ class FilterSliceBuilder(SliceBuilder):
 
 class BratsDataset(torch.utils.data.Dataset):
     # mode must be trian, test or val
-    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False, doMixUp=True, data_aug = True):
+    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False, doMixUp=True,
+                 data_aug=True, use_graph_brain=True):
         super(BratsDataset, self).__init__()
         self.filePath = filePath
         self.mode = mode
@@ -124,13 +126,16 @@ class BratsDataset(torch.utils.data.Dataset):
         self.hasMasks = hasMasks
         self.returnOffsets = returnOffsets
         self.doMixUp = doMixUp
+        self.original_mixup = True
         self.aug = data_aug
+        self.use_graph_brain = use_graph_brain
+        self.template_mixup = False
 
-        #augmentation settings
+        # augmentation settings
         self.nnAugmentation = True
         self.softAugmentation = False
         self.doRotate = True
-        self.rotDegrees = 15
+        self.rotDegrees = 10
         self.doScale = True
         self.scaleFactor = 1.1
         self.doFlip = True
@@ -138,6 +143,9 @@ class BratsDataset(torch.utils.data.Dataset):
         self.sigma = 10
         self.doIntensityShift = True
         self.maxIntensityShift = 0.1
+
+        graph_brain, _, _ = load_nii('/home/server/BraTS19_preprocessing/training/MixupData.nii.gz')
+        self.graph_brain = np.transpose(graph_brain, (1, 2, 3, 0))
 
     def __getitem__(self, index):
 
@@ -194,58 +202,75 @@ class BratsDataset(torch.utils.data.Dataset):
                     labels2 = self._toOrdinal(labels2)
                     labels2 = self._toEvaluationOneHot(labels2)
 
-            m1 = 0
-            m2 = 0
-            m3 = 0
-            alpha = 1.0
+            m1 = 0.8
+            m2 = 0.6
+            m3 = 0.5
+            alpha = 0.2
             lam = np.random.beta(alpha, alpha)
-            wt = labels2[..., 0]
-            tumor2 = np.einsum('whdc,whd->whdc', image2, wt)
 
-            tumor2, labels2 = aug.augment3DImage(tumor2,
-                                               labels2,
-                                               defaultLabelValues,
-                                               self.nnAugmentation,
-                                               self.doRotate,
-                                               self.rotDegrees,
-                                               self.doScale,
-                                               self.scaleFactor,
-                                               self.doElasticAug,
-                                               self.sigma)
+            # tumor mixup
+            # wt = labels2[..., 0]
+            # tumor2 = np.einsum('whdc,whd->whdc', image2, wt)
+            #
+            # tumor2, labels2 = aug.augment3DImage(tumor2,
+            #                                    labels2,
+            #                                    defaultLabelValues,
+            #                                    self.nnAugmentation,
+            #                                    self.doRotate,
+            #                                    self.rotDegrees,
+            #                                    self.doScale,
+            #                                    self.scaleFactor,
+            #                                    self.doElasticAug,
+            #                                    self.sigma)
+            #
+            # wt = labels2[..., 0]
+            # _wt = np.where(wt == 1, 0, 1)
+            # image_hollow = np.einsum('whdc,whd->whdc', image, _wt)
+            # image = image_hollow + (1-lam) * tumor2
 
-            wt = labels2[..., 0]
-            _wt = np.where(wt == 1, 0, 1)
-            image_hollow = np.einsum('whdc,whd->whdc', image, _wt)
-            image = image_hollow + lam * tumor2
-
-            # label smoothing
-            confidence = 1
-            uk = 0
-
+            image = lam*image + (1-lam)*image2
             target = np.zeros_like(labels)
-            # if lam > m1:
-            #     target[..., 0] = target[..., 0] + labels[..., 0]
-            # if (1 - lam) > m1:
-            #     target[..., 0] = target[..., 0] + labels2[..., 0]
-            target[..., 0] = target[..., 0] + confidence * labels[..., 0] + uk + lam * labels2[..., 0]
+            if lam > m1:
+                target[..., 0] = target[..., 0] + labels[..., 0]
+            if (1 - lam) > m1:
+                target[..., 0] = target[..., 0] + labels2[..., 0]
+            target[..., 0] = target[..., 0] + labels[..., 0] + (1-lam) * labels2[..., 0]
 
-            # if lam > m2:
-            #     target[..., 1] = target[..., 1] + labels[..., 1]
-            # if (1 - lam) > m2:
-            #     target[..., 1] = target[..., 1] + labels2[..., 1]
-            target[..., 1] = target[..., 1] + confidence * labels[..., 1] + uk + lam * labels2[..., 1]
+            if lam > m2:
+                target[..., 1] = target[..., 1] + labels[..., 1]
+            if (1 - lam) > m2:
+                target[..., 1] = target[..., 1] + labels2[..., 1]
+            target[..., 1] = target[..., 1] + labels[..., 1] + (1-lam) * labels2[..., 1]
 
-            # if lam > m3:
-            #     target[..., 2] = target[..., 2] + labels[..., 2]
-            # if (1 - lam) > m3:
-            #     target[..., 2] = target[..., 2] + labels2[..., 2]
-            target[..., 2] = target[..., 2] + confidence * labels[..., 2] + uk + lam * labels2[..., 2]
+            if lam > m3:
+                target[..., 2] = target[..., 2] + labels[..., 2]
+            if (1 - lam) > m3:
+                target[..., 2] = target[..., 2] + labels2[..., 2]
+            target[..., 2] = target[..., 2] + labels[..., 2] + (1-lam) * labels2[..., 2]
 
             target[target > 1] = 1
             labels = target
 
         # augment data
-        if self.mode == "train" and self.aug is True:
+        if self.use_graph_brain is True:
+            graph_brain, _, _ = load_nii('/home/server/BraTS19_preprocessing/training/MixupData.nii.gz')
+            graph_brain = np.transpose(graph_brain, (1, 2, 3, 0))
+            if self.mode == "train" and self.aug is True:
+                image, graph_brain, labels = aug.augment_two3DImage(image, graph_brain, labels, defaultLabelValues,
+                                                                    self.nnAugmentation,
+                                                                    self.doRotate,
+                                                                    self.rotDegrees,
+                                                                    self.doScale,
+                                                                    self.scaleFactor,
+                                                                    self.doFlip,
+                                                                    self.doElasticAug,
+                                                                    self.sigma,
+                                                                    self.doIntensityShift,
+                                                                    self.maxIntensityShift)
+            # image = image - graph_brain
+        elif self.template_mixup is True:
+            pass
+        elif self.mode == "train" and self.aug is True:
             image, labels = aug.augment3DImage(image,
                                                labels,
                                                defaultLabelValues,
@@ -259,6 +284,15 @@ class BratsDataset(torch.utils.data.Dataset):
                                                self.sigma,
                                                self.doIntensityShift,
                                                self.maxIntensityShift)
+            # template mix up
+            # alpha = 0.2
+            # beta = 0.2
+            # lam = np.random.beta(alpha, beta)
+            # image = lam * image + (1 - lam) * self.graph_brain
+            # labels = lam * labels
+        # elif self.mode != 'train':
+        #     lam = 0.5
+        #     image = lam * image + (1 - lam) * self.graph_brain
 
         # random crop
         if not self.randomCrop is None:
@@ -267,36 +301,61 @@ class BratsDataset(torch.utils.data.Dataset):
             y = random.randint(0, shape[1] - self.randomCrop[1])
             z = random.randint(0, shape[2] - self.randomCrop[2])
             image = image[x:x+self.randomCrop[0], y:y+self.randomCrop[1], z:z+self.randomCrop[2], :]
-            if self.hasMasks: labels = labels[x:x + self.randomCrop[0], y:y + self.randomCrop[1], z:z + self.randomCrop[2], :]
+            try:
+                graph_brain = graph_brain[x:x+self.randomCrop[0], y:y+self.randomCrop[1], z:z+self.randomCrop[2], :]
+            except:
+                pass
+            if self.hasMasks:labels = labels[x:x + self.randomCrop[0], y:y + self.randomCrop[1], z:z + self.randomCrop[2], :]
 
         image = np.transpose(image, (3, 0, 1, 2))  # bring into NCWH format
-
+        try:
+            graph_brain = np.transpose(graph_brain, (3, 0, 1, 2))
+        except:
+            pass
         if self.hasMasks: labels = np.transpose(labels, (3, 0, 1, 2))  # bring into NCWH format
 
         # to tensor
         #image = image[:, 0:32, 0:32, 0:32]
         # image = self.make_crop(image)
         image = torch.from_numpy(image)
+        try:
+            graph_brain = torch.from_numpy(graph_brain)
+        except:
+            pass
         if self.hasMasks:
             #labels = labels[:, 0:32, 0:32, 0:32]
             labels = torch.from_numpy(labels)
 
         #get pid
         pid = self.file["pids_" + self.mode][index]
-
-        if self.returnOffsets:
-            xOffset = self.file["xOffsets_" + self.mode][index]
-            yOffset = self.file["yOffsets_" + self.mode][index]
-            zOffset = self.file["zOffsets_" + self.mode][index]
-            if self.hasMasks:
-                return image, str(pid), labels, xOffset, yOffset, zOffset
+        if self.use_graph_brain:
+            if self.returnOffsets:
+                xOffset = self.file["xOffsets_" + self.mode][index]
+                yOffset = self.file["yOffsets_" + self.mode][index]
+                zOffset = self.file["zOffsets_" + self.mode][index]
+                if self.hasMasks:
+                    return image, str(pid), labels, xOffset, yOffset, zOffset, graph_brain
+                else:
+                    return image, pid, xOffset, yOffset, zOffset, graph_brain
             else:
-                return image, pid, xOffset, yOffset, zOffset
+                if self.hasMasks:
+                    return image, str(pid), labels, graph_brain
+                else:
+                    return image, pid, graph_brain
         else:
-            if self.hasMasks:
-                return image, str(pid), labels
+            if self.returnOffsets:
+                xOffset = self.file["xOffsets_" + self.mode][index]
+                yOffset = self.file["yOffsets_" + self.mode][index]
+                zOffset = self.file["zOffsets_" + self.mode][index]
+                if self.hasMasks:
+                    return image, str(pid), labels, xOffset, yOffset, zOffset
+                else:
+                    return image, pid, xOffset, yOffset, zOffset
             else:
-                return image, pid
+                if self.hasMasks:
+                    return image, str(pid), labels
+                else:
+                    return image, pid
 
     def __len__(self):
         #lazily open file
@@ -311,9 +370,9 @@ class BratsDataset(torch.utils.data.Dataset):
     def _toEvaluationOneHot(self, labels):
         shape = labels.shape
         out = np.zeros([shape[0], shape[1], shape[2], 3], dtype=np.float32)
-        out[:, :, :, 0] = (labels != 0)
-        out[:, :, :, 1] = (labels != 0) * (labels != 2)
-        out[:, :, :, 2] = (labels == 4)
+        out[:, :, :, 0] = (labels != 0)  # WT
+        out[:, :, :, 1] = (labels != 0) * (labels != 2)  # TC
+        out[:, :, :, 2] = (labels == 4)  # ET
         return out
 
     def _toOrignalCategoryOneHot(self, labels):
@@ -500,27 +559,19 @@ def get_brats_train_loaders(config):
     train_path = loaders_config['train_path']
     val_path = loaders_config['val_path']
 
-    # loss_file_num = 0
-    # for i in train_ids:
-    #     name = i + ".tfrecord.gzip"
-    #     answer = search('/home/server/data/TFRecord/val', name)
-    #     if answer == -1:
-    #         print("查无此文件", name)
-    #         loss_file_num += 1
-    # print(f'loss file num is {loss_file_num}')
-
     logger.info(f'Loading training set from: {train_path}...')
     # train_datasets = BraTSDataset(brats, train_ids, phase='train',
     #                               transformer_config=loaders_config['transformer'],
     #                               is_mixup=loaders_config['mixup'])
-    train_datasets = BratsDataset(train_path[0], randomCrop=[128, 128, 128], doMixUp=loaders_config['mixup'], data_aug=loaders_config['data_aug'])
+    train_datasets = BratsDataset(train_path[0], doMixUp=loaders_config['mixup'],
+                                  data_aug=loaders_config['data_aug'], use_graph_brain=loaders_config['graph_brain'])
 
     logger.info(f'Loading validation set from: {val_path}...')
     # brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train
     # val_datasets = BraTSDataset(brats, validation_ids, phase='val',
     #                             transformer_config=loaders_config['transformer'],
     #                             is_mixup=False)
-    val_datasets = BratsDataset(val_path[0], mode='validation')
+    val_datasets = BratsDataset(val_path[0], mode='validation', use_graph_brain=loaders_config['graph_brain'])
 
     num_workers = loaders_config.get('num_workers', 1)
     logger.info(f'Number of workers for train/val datasets: {num_workers}')

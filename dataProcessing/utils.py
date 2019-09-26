@@ -7,13 +7,14 @@ import nibabel as nib
 import numpy as np
 import os
 import logging
+from unet3d.utils import get_logger
 from skimage import measure, transform
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
+logger = get_logger('utils')
 
 try:
     import cv2
 except:
-    logging.warning('Could not import opencv. Augmentation functions will be unavailable.')
+    logger.warning('Could not import opencv. Augmentation functions will be unavailable.')
 else:
 
     def rotate_image(img, angle, interp=cv2.INTER_LINEAR):

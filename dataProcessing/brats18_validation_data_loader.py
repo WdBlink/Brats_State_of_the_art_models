@@ -66,7 +66,16 @@ def crop_or_pad_slice_to_size(image, target_size, channels=None):
         image = image[:x_t, :, :, :]
         print(image.shape)
 
+    if y_s > y_t:
+        print("Too wide...")
+        print(image.shape)
+        image = image[:, :y_t, :, :]
+        print(image.shape)
+
     if not channels is None:
+        print(output_volume.shape)
+        print(image.shape)
+
         output_volume[0:x_s, 0:y_s, 0:z_s, :] = image
     else:
         output_volume[0:x_s, 0:y_s, 0:z_s] = image
@@ -274,8 +283,8 @@ def load_and_maybe_process_data(input_folder,
 
 
 if __name__ == '__main__':
-    input_folder = "/home/server/data/BraTS19/validation"
-    preprocessing_folder = "/home/server/BraTS19_preprocessing/validation"
+    input_folder = "/home/server/BraTS19_preprocessing/MICCAI_BraTS_2019_Data_Testing"
+    preprocessing_folder = "/home/server/data/BraTS19/testing"
 
     d = load_and_maybe_process_data(input_folder, preprocessing_folder, 4, force_overwrite=True)
 

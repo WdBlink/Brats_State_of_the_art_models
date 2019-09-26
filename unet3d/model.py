@@ -762,6 +762,12 @@ class NoNewNet(nn.Module):
         channels = 30
         self.levels = 5
 
+        self.firstConv = nn.Sequential(
+            nn.Conv3d(960, 480, kernel_size=1, stride=1, padding=0, bias=True),
+            SynchronizedBatchNorm3d(480),
+            nn.LeakyReLU()
+            # nn.Conv3d(in_channels*2, in_channels, kernel_size=1, stride=1, padding=0, bias=True),
+        )
         self.lastConv = nn.Conv3d(channels, 3, 1, bias=True)
 
         #create encoder levels
@@ -780,6 +786,19 @@ class NoNewNet(nn.Module):
         decoderModules.append(DecoderModule(channels, channels, False, True))
         self.decoders = nn.ModuleList(decoderModules)
 
+        # weight initialization
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, -100)
+
+            elif isinstance(m, nn.Conv3d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+
+            elif isinstance(m, nn.BatchNorm3d):
+                nn.init.constant_(m.weight.item(), 1)
+                nn.init.constant_(m.bias.item(), 0)
+
     def forward(self, x):
         inputStack = []
         for i in range(self.levels):
@@ -795,6 +814,187 @@ class NoNewNet(nn.Module):
         x = self.lastConv(x)
         x = torch.sigmoid(x)
         return x
+
+
+class FeatureSelectNet(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(FeatureSelectNet, self).__init__()
+        channels = 30
+        self.levels = 5
+
+        self.firstConv = nn.Sequential(
+            nn.Conv3d(960, 480, kernel_size=1, stride=1, padding=0, bias=True),
+            SynchronizedBatchNorm3d(480),
+            nn.ReLU()
+            # nn.Conv3d(in_channels*2, in_channels, kernel_size=1, stride=1, padding=0, bias=True),
+        )
+        self.softmax = nn.Softmax(dim=1)
+        self.lastConv = nn.Conv3d(channels, 3, 1, bias=True)
+
+        # create encoder levels
+        encoderModules = []
+        encoderModules.append(EncoderModule(in_channels, channels, False, True))
+        for i in range(self.levels - 2):
+            encoderModules.append(EncoderModule(channels * pow(2, i), channels * pow(2, i+1), True, True))
+        encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), True, False))
+        self.encoders = nn.ModuleList(encoderModules)
+
+        # create decoder levels
+        decoderModules = []
+        decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, False))
+        for i in range(self.levels - 2):
+            decoderModules.append(DecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
+        decoderModules.append(DecoderModule(channels, channels, False, True))
+        self.decoders = nn.ModuleList(decoderModules)
+
+    def forward(self, *input):
+
+        # graph_ = self.firstConv(graph)
+        # x_ = self.firstConv(x)
+        # x = x_ - graph_
+        x = input[0]
+        graph = input[1]
+        for i in range(self.levels):
+            graph = self.encoders[i](graph)
+
+        inputStack = []
+        for i in range(self.levels):
+            x = self.encoders[i](x)
+            if i < self.levels - 1:
+                inputStack.append(x)
+
+        attention = torch.cat((x, graph), 1)
+        attention = self.firstConv(attention)
+        attention = torch.sigmoid(attention)
+        x = attention * x
+
+        for i in range(self.levels):
+            x = self.decoders[i](x)
+            if i < self.levels - 1:
+                x = x + inputStack.pop()
+
+        x = self.lastConv(x)
+        x = torch.sigmoid(x)
+        return x
+
+
+class FeatureMinusNet(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(FeatureMinusNet, self).__init__()
+        channels = 30
+        self.levels = 5
+
+        self.firstConv = nn.Sequential(
+            nn.Conv3d(in_channels, in_channels, kernel_size=1, stride=1, padding=0, bias=True),
+            SynchronizedBatchNorm3d(in_channels),
+            nn.ReLU()
+            # nn.Conv3d(in_channels*2, in_channels, kernel_size=1, stride=1, padding=0, bias=True),
+        )
+        self.softmax = nn.Softmax(dim=1)
+        self.lastConv = nn.Conv3d(channels, 3, 1, bias=True)
+
+        # create encoder levels
+        encoderModules = []
+        encoderModules.append(EncoderModule(in_channels, channels, False, True))
+        for i in range(self.levels - 2):
+            encoderModules.append(EncoderModule(channels * pow(2, i), channels * pow(2, i+1), True, True))
+        encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), True, False))
+        self.encoders = nn.ModuleList(encoderModules)
+
+        # create decoder levels
+        decoderModules = []
+        decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, False))
+        for i in range(self.levels - 2):
+            decoderModules.append(DecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
+        decoderModules.append(DecoderModule(channels, channels, False, True))
+        self.decoders = nn.ModuleList(decoderModules)
+
+        # weight initialization
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, -100)
+
+            elif isinstance(m, nn.Conv3d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+
+            elif isinstance(m, nn.BatchNorm3d):
+                nn.init.constant_(m.weight.item(), 1)
+                nn.init.constant_(m.bias.item(), 0)
+
+    def forward(self, *input):
+
+        # graph_ = self.firstConv(graph)
+        # x_ = self.firstConv(x)
+        # x = x_ - graph_
+        x = input[0]
+        graph = input[1]
+
+        x = self.firstConv(x)
+        graph = self.firstConv(graph)
+        feature = x - graph
+        x = feature
+
+        inputStack = []
+        for i in range(self.levels):
+            x = self.encoders[i](x)
+            if i < self.levels - 1:
+                inputStack.append(x)
+
+        for i in range(self.levels):
+            x = self.decoders[i](x)
+            if i < self.levels - 1:
+                x = x + inputStack.pop()
+
+        x = self.lastConv(x)
+        x = torch.sigmoid(x)
+        return x, feature
+
+
+class DistanceNoNewNet(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(DistanceNoNewNet, self).__init__()
+        channels = 30
+        self.levels = 5
+        self.lastConv = nn.Conv3d(channels, 3, 1, bias=True)
+
+        # create encoder levels
+        encoderModules = []
+        encoderModules.append(EncoderModule(4, channels, False, True))
+        for i in range(self.levels - 2):
+            encoderModules.append(EncoderModule(channels * pow(2, i), channels * pow(2, i+1), True, True))
+        encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), True, False))
+        self.encoders = nn.ModuleList(encoderModules)
+
+        # create decoder levels
+        decoderModules = []
+        decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, False))
+        for i in range(self.levels - 2):
+            decoderModules.append(DecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
+        decoderModules.append(DecoderModule(channels, channels, False, True))
+        self.decoders = nn.ModuleList(decoderModules)
+
+    def forward(self, x, graph):
+        for i in range(self.levels):
+            graph = self.encoders[i](graph)
+
+        inputStack = []
+        for i in range(self.levels):
+            x = self.encoders[i](x)
+            if i < self.levels - 1:
+                inputStack.append(x)
+        x_ = x
+        for i in range(self.levels):
+            x = self.decoders[i](x)
+            if i < self.levels - 1:
+                x = x + inputStack.pop()
+
+        x = self.lastConv(x)
+        x = torch.sigmoid(x)
+        return x, x_, graph
 
 
 class ResNoNewNet(nn.Module):
