@@ -535,6 +535,24 @@ class unetUp(nn.Module):
 #             x = F.relu(self.gn2(self.conv2(x)), inplace=True)
 #         return x
 
+class SELayer(nn.Module):
+    def __init__(self, channel, reduction=4):
+        super(SELayer, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool3d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1, 1)
+        return x * y.expand_as(x)
+
+
 class EncoderModule(nn.Module):
     def __init__(self, inChannels, outChannels, maxpool=False, secondConv=True, hasDropout=False):
         super(EncoderModule, self).__init__()
@@ -544,6 +562,7 @@ class EncoderModule(nn.Module):
         self.hasDropout = hasDropout
         self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
         self.gn1 = nn.GroupNorm(groups, outChannels)
+        # self.se = SELayer(outChannels)
         if secondConv:
             self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
             self.gn2 = nn.GroupNorm(groups, outChannels)
@@ -559,6 +578,7 @@ class EncoderModule(nn.Module):
             x = self.dropout(x)
         if self.secondConv:
             x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=doInplace)
+        # x = self.se(x)
         return x
 
 

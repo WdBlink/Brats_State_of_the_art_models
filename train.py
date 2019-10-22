@@ -1,5 +1,5 @@
 import importlib
-
+import os
 import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -67,8 +67,14 @@ def _create_optimizer(config, model):
     elif optimizer_config['mode'] == 'SWA':
         learning_rate = optimizer_config['learning_rate']
         weight_decay = optimizer_config['weight_decay']
-        base_opt = optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay, momentum=0.9)
+        momentum = optimizer_config['momentum']
+        base_opt = optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay, momentum=momentum)
         optimizer = torchcontrib.optim.SWA(base_opt, swa_start=10, swa_freq=5, swa_lr=0.05)
+    elif optimizer_config['mode'] == 'SGD':
+        learning_rate = optimizer_config['learning_rate']
+        weight_decay = optimizer_config['weight_decay']
+        momentum = 0.9
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay, momentum=momentum)
     return optimizer
 
 
@@ -87,11 +93,11 @@ def _create_lr_scheduler(config, optimizer):
 
 
 def main():
-    # Create main logger
-    logger = get_logger('UNet3DTrainer')
-
     # Load and log experiment configuration
     config = load_config()
+
+    # Create main logger
+    logger = get_logger('UNet3DTrainer', file_name=config['trainer']['checkpoint_dir'])
     logger.info(config)
 
     manual_seed = config.get('manual_seed', None)

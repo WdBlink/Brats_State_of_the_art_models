@@ -5,7 +5,7 @@ model:
   # model class
   name: NoNewNet
   # number of input channels to the model
-  in_channels: 4
+  in_channels: 6
   # number of output channels
   out_channels: 3
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
@@ -19,15 +19,17 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_newdiceloss_DataAug/
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/templateMinusChannelAddition_dataaug=True_NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
-  resume: null
+  resume: /home/server/github/pytorch-3dunet/checkpoints/templateChannelAddition_dataaug=True_NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/epoch96_checkpoint.pytorch
   # fine-tune a given pre-trained model
-  pre_trained: /home/server/github/pytorch-3dunet/checkpoints/baseline/last_checkpoint.pytorch
+  pre_trained: null
+  # output test result model
+  test_model: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint2.pytorch
   # how many iterations between validations
-  validate_after_iters: 50
+  validate_after_iters: 300
   # how many iterations between tensorboard logging
-  log_after_iters: 50
+  log_after_iters: 300
   # max number of epochs
   epochs: 200
   # max number of iterations
@@ -39,9 +41,9 @@ optimizer:
   #mode
   mode: Adam
   # initial learning rate
-  learning_rate: 0.0001
+  learning_rate: 0.00005
   # weight decay
-  weight_decay: 0.003
+  weight_decay: 0.00003
 # loss function configuration
 loss:
   # loss function to be used during training
@@ -68,7 +70,7 @@ lr_scheduler:
 # data loaders configuration
 loaders:
   # batch size
-  batch_size: 1
+  batch_size: 2
   # if use Mix Up
   mixup: False
   # if use data augment

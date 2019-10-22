@@ -5,6 +5,7 @@ from torch.autograd import Variable
 from torch.nn import MSELoss, SmoothL1Loss, L1Loss
 from torch import Tensor, einsum
 from unet3d.utils import simplex
+from torch.nn.modules.loss import _Loss
 
 
 def compute_per_channel_dice(input, target, epsilon=1e-5, ignore_index=None, weight=None):
@@ -38,6 +39,66 @@ def compute_per_channel_dice(input, target, epsilon=1e-5, ignore_index=None, wei
     return 2. * intersect / denominator.clamp(min=epsilon)
 
 
+class SoftDiceLoss(_Loss):
+    '''
+    Soft_Dice = 2*|dot(A, B)| / (|dot(A, A)| + |dot(B, B)| + eps)
+    eps is a small constant to avoid zero division,
+    '''
+
+    def __init__(self, *args, **kwargs):
+        super(SoftDiceLoss, self).__init__()
+
+    def forward(self, y_pred, y_true, eps=1e-8):
+        intersection = torch.sum(torch.mul(y_pred, y_true))
+        union = torch.sum(torch.mul(y_pred, y_pred)) + torch.sum(torch.mul(y_true, y_true)) + eps
+
+        dice = 2 * intersection / union
+        dice_loss = 1 - dice
+
+        return dice_loss
+
+
+class CustomKLLoss(_Loss):
+    '''
+    KL_Loss = (|dot(mean , mean)| + |dot(std, std)| - |log(dot(std, std))| - 1) / N
+    N is the total number of image voxels
+    '''
+
+    def __init__(self, *args, **kwargs):
+        super(CustomKLLoss, self).__init__()
+
+    def forward(self, mean, std):
+        return torch.mean(torch.mul(mean, mean)) + torch.mean(torch.mul(std, std)) - torch.mean(
+            torch.log(torch.mul(std, std))) - 1
+
+
+class CombinedLoss(_Loss):
+    '''
+    Combined_loss = Dice_loss + k1 * L2_loss + k2 * KL_loss
+    As default: k1=0.1, k2=0.1
+    '''
+
+    def __init__(self, k1=0.1, k2=0.1):
+        super(CombinedLoss, self).__init__()
+        self.k1 = k1
+        self.k2 = k2
+        self.dice_loss = BratsDiceLoss()
+        self.l2_loss = nn.MSELoss()
+        self.kl_loss = CustomKLLoss()
+
+    def forward(self, vae_truth, y_pred, y_mid, y_true):
+        est_mean, est_std = (y_mid[:, :128], y_mid[:, 128:])
+        seg_pred, seg_truth = (y_pred[:, :3, :, :, :], y_true)
+        vae_pred, vae_truth = (y_pred[:, 3:, :, :, :], vae_truth)
+        dice_loss = self.dice_loss(seg_pred, seg_truth)
+        l2_loss = self.l2_loss(vae_pred, vae_truth)
+        kl_div = self.kl_loss(est_mean, est_std)
+        combined_loss = dice_loss + self.k1 * l2_loss + self.k2 * kl_div
+        # print("dice_loss:%.4f, L2_loss:%.4f, KL_div:%.4f, combined_loss:%.4f"%(dice_loss,l2_loss,kl_div,combined_loss))
+
+        return combined_loss
+
+
 class BratsDiceLoss(nn.Module):
     """Dice loss of Brats dataset
     Args:
@@ -69,7 +130,7 @@ class BratsDiceLoss(nn.Module):
         etMask = etMask.view(s[0], s[2], s[3], s[4])
 
         # calculate losses
-        wtLoss = self.weightedDiceLoss(wt, wtMask, mean=0.03)
+        wtLoss = self.weightedDiceLoss(wt, wtMask, mean=0.05)
         tcLoss = self.weightedDiceLoss(tc, tcMask, mean=0.02)
         etLoss = self.weightedDiceLoss(et, etMask, mean=0.01)
 
@@ -799,6 +860,8 @@ def get_loss_criterion(config):
         return bratsMixedLoss()
     elif name == 'CaeLoss':
         return CaeLoss()
+    elif name == 'CombinedLoss':
+        return CombinedLoss()
     else:
         raise RuntimeError(f"Unsupported loss function: '{name}'. Supported losses: {SUPPORTED_LOSSES}")
 

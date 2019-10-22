@@ -44,7 +44,7 @@ def save_checkpoint(state, is_best, checkpoint_dir, logger=None):
             f"Checkpoint directory does not exists. Creating {checkpoint_dir}")
         os.mkdir(checkpoint_dir)
 
-    last_file_path = os.path.join(checkpoint_dir, 'last_checkpoint.pytorch')
+    last_file_path = os.path.join(checkpoint_dir, f'epoch{state["epoch"]}_checkpoint.pytorch')
     log_info(f"Saving last checkpoint to '{last_file_path}'")
     torch.save(state, last_file_path)
     if is_best:
@@ -81,7 +81,8 @@ def load_checkpoint(checkpoint_path, model, optimizer=None):
     return state
 
 
-def get_logger(name, level=logging.INFO):
+def get_logger(name, file_name='./', level=logging.INFO):
+    # logging.basicConfig(filename=file_name+'model.log', level=level)
     logger = logging.getLogger(name)
     logger.setLevel(level)
     # Logging to console
@@ -90,6 +91,13 @@ def get_logger(name, level=logging.INFO):
         '%(asctime)s [%(threadName)s] %(levelname)s %(name)s - %(message)s')
     stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
+
+    if not os.path.exists(file_name):
+        os.makedirs(file_name)
+
+    file_handler = logging.FileHandler(file_name+'model.log')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
 
     return logger
 

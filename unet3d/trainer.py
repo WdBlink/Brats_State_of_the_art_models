@@ -167,6 +167,9 @@ class UNet3DTrainer:
         train_losses = utils.RunningAverage()
         train_eval_scores_multi = utils.RunningAverageMulti()
 
+        # make predictions
+        self.makePredictions(self.loaders['challenge'])
+
         # sets the model in training mode
         self.model.train()
 
@@ -191,30 +194,31 @@ class UNet3DTrainer:
             loss.backward()
             self.optimizer.step()
 
-            if self.num_iterations % self.validate_after_iters == 0:
-                # evaluate on validation set
-                eval_score = self.validate(self.loaders['val'])
-                # adjust learning rate if necessary
-                # if isinstance(self.scheduler, ReduceLROnPlateau):
-                    # self.scheduler.step(eval_score)
-                if self.scheduler is None:
-                    pass
-                else:
-                    self.scheduler.step()
-                    # pass
-
-                # log current learning rate in tensorboard
-                self._log_lr()
-
-                # remember best validation metric
-                is_best = self._is_best_eval_score(eval_score)
-
-                # save checkpoint
-                self._save_checkpoint(is_best)
-
-                # make challenge predict
-                if is_best:
-                    self.makePredictions(self.loaders['challenge'])
+            # if self.num_iterations % self.validate_after_iters == 0:
+            #     # evaluate on validation set
+            #     eval_score = self.validate(self.loaders['val'])
+            #     # adjust learning rate if necessary
+            #     # if isinstance(self.scheduler, ReduceLROnPlateau):
+            #         # self.scheduler.step(eval_score)
+            #     if self.scheduler is None:
+            #         pass
+            #     else:
+            #         self.scheduler.step()
+            #         # pass
+            #
+            #     # log current learning rate in tensorboard
+            #     self._log_lr()
+            #
+            #     # remember best validation metric
+            #     is_best = self._is_best_eval_score(eval_score)
+            #
+            #     # save checkpoint
+            #     self._save_checkpoint(is_best)
+            #
+            #     # make challenge predict
+            #     if is_best:
+            #         pass
+            #         # self.makePredictions(self.loaders['challenge'])
 
             if self.num_iterations % self.log_after_iters == 0:
                 # if model contains final_activation layer for normalizing logits apply it, otherwise both
@@ -238,10 +242,10 @@ class UNet3DTrainer:
                 # log stats, params and images
                 self.logger.info(
                     f'Training stats.\n'
-                    f'Loss: {train_losses.avg}. \n'
-                    f'Evaluation score WT:{train_eval_scores_multi.dice_WT}, \n'
-                    f'TC:{train_eval_scores_multi.dice_TC}, \n'
-                    f'ET:{train_eval_scores_multi.dice_ET}')
+                    f'Train_Loss: {train_losses.avg}. \n'
+                    f'Train_WT:{train_eval_scores_multi.dice_WT}, \n'
+                    f'Train_TC:{train_eval_scores_multi.dice_TC}, \n'
+                    f'Train_ET:{train_eval_scores_multi.dice_ET}')
                 self._log_stats_multi('train', train_losses.avg, train_eval_scores_multi.dice_WT,
                                       train_eval_scores_multi.dice_TC, train_eval_scores_multi.dice_ET,
                                       train_eval_scores_multi.sens_WT, train_eval_scores_multi.sens_TC,
@@ -256,6 +260,30 @@ class UNet3DTrainer:
                 return True
 
             self.num_iterations += config['loaders']['batch_size']
+
+        # evaluate on validation set
+        eval_score = self.validate(self.loaders['val'])
+        # adjust learning rate if necessary
+        # if isinstance(self.scheduler, ReduceLROnPlateau):
+        # self.scheduler.step(eval_score)
+        if self.scheduler is None:
+            pass
+        else:
+            self.scheduler.step()
+            # pass
+
+        # log current learning rate in tensorboard
+        self._log_lr()
+
+        # remember best validation metric
+        is_best = self._is_best_eval_score(eval_score)
+
+        # save checkpoint
+        self._save_checkpoint(is_best)
+
+        # make challenge predict
+        if eval_score > 0.89:
+            self.makePredictions(self.loaders['challenge'])
 
         return False
 
@@ -282,7 +310,17 @@ class UNet3DTrainer:
 
                     # print the bad guy
                     if eval_score[0] < 0.5:
-                        self.logger.info(f'The patient {pid} score is {eval_score}!!!')
+                        wt_gt = (target[:, 0, ...] == 1).sum()
+                        tc_gt = (target[:, 1, ...] == 1).sum()
+                        et_gt = (target[:, 2, ...] == 1).sum()
+
+                        wt_pred = (output[:, 0, ...] >= 0.5).sum()
+                        tc_pred = (output[:, 1, ...] >= 0.5).sum()
+                        et_pred = (output[:, 2, ...] >= 0.5).sum()
+                        self.logger.info(f'The patient {pid} score is {eval_score}!!!\n'
+                                         f'The pixel of WT_GT|WT_OUT is {wt_gt}|{wt_pred}\n'
+                                         f'The pixel of TC_GT|TC_OUT is {tc_gt}|{tc_pred}\n'
+                                         f'The pixel of ET_GT|ET_OUT is {et_gt}|{et_pred}\n')
 
                     # val_scores.update(eval_score.item(), self._batch_size(input))
                     val_scores_multi.update(eval_score, self._batch_size(input))
@@ -304,12 +342,12 @@ class UNet3DTrainer:
                 self.logger.info(f'Validation finished. \n'
                                  f'Loss: {val_losses.avg} \n'
                                  f'Evaluation score \n'
-                                 f'WT:{val_scores_multi.dice_WT}\n'
-                                 f'TC:{val_scores_multi.dice_TC} \n'
-                                 f'ET:{val_scores_multi.dice_ET} \n'
-                                 f'sensitivity WT:{val_scores_multi.sens_WT}\n'
-                                 f'sensitivity TC:{val_scores_multi.sens_TC}\n'
-                                 f'sensitivity ET:{val_scores_multi.sens_ET}')
+                                 f'Val_WT:{val_scores_multi.dice_WT}\n'
+                                 f'Val_TC:{val_scores_multi.dice_TC} \n'
+                                 f'Val_ET:{val_scores_multi.dice_ET} \n'
+                                 f'Val_sensitivity WT:{val_scores_multi.sens_WT}\n'
+                                 f'Val_sensitivity TC:{val_scores_multi.sens_TC}\n'
+                                 f'Val_sensitivity ET:{val_scores_multi.sens_ET}')
 
                 return val_scores_multi.dice_WT
         finally:
@@ -318,19 +356,28 @@ class UNet3DTrainer:
 
     def makePredictions(self, challenge_loader):
         # model is already loaded from disk by constructor
-
-        basePath = os.path.join(config['trainer']['checkpoint_dir'], "_iter{}".format(self.num_iterations))
+        basePath = os.path.join(config['trainer']['checkpoint_dir'], "epoch{}".format(self.num_epoch+1))
         if not os.path.exists(basePath):
             os.makedirs(basePath)
 
         with torch.no_grad():
-            for i, data in enumerate(challenge_loader):
+            for i, data in enumerate(tqdm(challenge_loader)):
                 inputs, pids, xOffset, yOffset, zOffset = data
                 print("processing {}".format(pids[0]))
                 inputs = inputs.to(config['device'])
 
                 # predict labels and bring into required shape
                 outputs = self.model(inputs)
+                # TTA
+                outputs += self.model(inputs.flip(dims=(2,))).flip(dims=(2,))
+                outputs += self.model(inputs.flip(dims=(3,))).flip(dims=(3,))
+                outputs += self.model(inputs.flip(dims=(4,))).flip(dims=(4,))
+                outputs += self.model(inputs.flip(dims=(2, 3))).flip(dims=(2, 3))
+                outputs += self.model(inputs.flip(dims=(2, 4))).flip(dims=(2, 4))
+                outputs += self.model(inputs.flip(dims=(3, 4))).flip(dims=(3, 4))
+                outputs += self.model(inputs.flip(dims=(2, 3, 4))).flip(dims=(2, 3, 4))
+                outputs = outputs / 8.0  # mean
+
                 outputs = outputs[:, :, :, :, :155]
                 s = outputs.shape
                 fullsize = outputs.new_zeros((s[0], s[1], 240, 240, 155))
@@ -355,8 +402,11 @@ class UNet3DTrainer:
                 result[et] = 4
 
                 npResult = result.cpu().numpy()
-                max = npResult.max()
-                min = npResult.min()
+                ET_voxels = (npResult == 4).sum()
+                if ET_voxels < 500:
+                    # torch.where(result == 4, result, torch.ones_like(result))
+                    npResult[np.where(npResult == 4)] = 1
+
                 path = os.path.join(basePath, "{}.nii.gz".format(pids[0]))
                 utils.save_nii(path, npResult, None, None)
 
@@ -382,9 +432,9 @@ class UNet3DTrainer:
         output = self.model(input)
         feature_maps = []
         # compute the loss
-        if self.model_name == 'NNNet_Vae':
-            loss = self.loss_criterion(input, output[1], output[0], target, output[2], output[3])
-            output = output[0]
+        if self.model_name == 'NvNet':
+            loss = self.loss_criterion(input, output[0], output[1], target)
+            output = output[0][:, :3, :, :, :]
         elif self.model_name == 'NNNet_Cae':
             loss = self.loss_criterion(input, target, output[0], output[1])
             if mode == 'train':

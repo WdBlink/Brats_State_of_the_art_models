@@ -5,7 +5,7 @@ model:
   # model class
   name: NoNewNet
   # number of input channels to the model
-  in_channels: 4
+  in_channels: 6
   # number of output channels
   out_channels: 3
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
@@ -19,17 +19,17 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/SEEncoder_ChannelAddition_dataaug=True_NoNewNet_Adam_batchsize=1_FixedNewdiceloss2_DataAug/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
-  resume: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/last_checkpoint.pytorch
+  resume: null
   # fine-tune a given pre-trained model
-  pre_trained: null
+  pre_trained: /home/server/github/pytorch-3dunet/checkpoints/SE_ChannelAddition_dataaug=True_NoNewNet_Adam_batchsize=2_FixedNewdiceloss2_DataAug/epoch166_checkpoint.pytorch
   # output test result model
   test_model: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint2.pytorch
   # how many iterations between validations
-  validate_after_iters: 51
+  validate_after_iters: 300
   # how many iterations between tensorboard logging
-  log_after_iters: 51
+  log_after_iters: 300
   # max number of epochs
   epochs: 200
   # max number of iterations

@@ -13,6 +13,16 @@ import BraTS
 from unet3d.utils import get_logger
 from unet3d.losses import expand_as_one_hot
 import preprocess.augmentation as aug
+import nibabel as nib
+
+def load_nii(img_path):
+
+    '''
+    Shortcut to load a nifti file
+    '''
+
+    nimg = nib.load(img_path)
+    return nimg.get_data(), nimg.affine, nimg.header
 
 
 class SliceBuilder:
@@ -138,6 +148,8 @@ class BratsDataset(torch.utils.data.Dataset):
         self.sigma = 10
         self.doIntensityShift = True
         self.maxIntensityShift = 0.1
+        graph_brain, _, _ = load_nii('/home/server/BraTS19_preprocessing/training/MixupData.nii.gz')
+        self.graph_brain = np.transpose(graph_brain, (1, 2, 3, 0))
 
     def __getitem__(self, index):
 
@@ -195,9 +207,9 @@ class BratsDataset(torch.utils.data.Dataset):
                     labels2 = self._toEvaluationOneHot(labels2)
 
             m1 = 0.5
-            m2 = 0.3
-            m3 = 0.2
-            alpha = 1.0
+            m2 = 0.5
+            m3 = 0.5
+            alpha = 0.4
             lam = np.random.beta(alpha, alpha)
             image = lam * image + (1 - lam) * image2
 
@@ -214,15 +226,22 @@ class BratsDataset(torch.utils.data.Dataset):
             #     target[..., 1] = target[..., 1] + labels2[..., 1]
             target[..., 1] = target[..., 1] + lam * labels[..., 1] + (1 - lam) * labels2[..., 1]
 
-            if lam > m3:
-                target[..., 2] = target[..., 2] + labels[..., 2]
-            if (1 - lam) > m3:
-                target[..., 2] = target[..., 2] + labels2[..., 2]
+            # if lam > m3:
+            #     target[..., 2] = target[..., 2] + labels[..., 2]
+            # if (1 - lam) > m3:
+            #     target[..., 2] = target[..., 2] + labels2[..., 2]
+            target[..., 2] = target[..., 2] + lam * labels[..., 2] + (1 - lam) * labels2[..., 2]
 
             target[target > 1] = 1
             labels = target
 
-        #augment data
+        # templateChannelAddition
+        minus = image - self.graph_brain
+        result = np.clip(np.abs(minus), 1, 255)
+        image = np.concatenate((image, result[:, :, :, 0:1]), 3)
+        image = np.concatenate((image, result[:, :, :, 3:4]), 3)
+
+        # augment data
         if self.mode == "train" and self.aug is True:
             image, labels = aug.augment3DImage(image,
                                                labels,
