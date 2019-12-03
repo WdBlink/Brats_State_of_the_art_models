@@ -11,7 +11,8 @@ from unet3d.config import load_config
 from unet3d.losses import get_loss_criterion
 from unet3d.metrics import get_evaluation_metric
 from unet3d.model import get_model
-from unet3d.trainer import UNet3DTrainer
+# from unet3d.trainer import UNet3DTrainer
+from unet3d.NoNewCaps_trainer2 import UNet3DTrainer
 from unet3d.utils import get_logger
 from unet3d.utils import get_number_of_learnable_parameters
 
@@ -59,11 +60,23 @@ def _create_trainer(config, model, optimizer, lr_scheduler, loss_criterion, eval
 def _create_optimizer(config, model):
     assert 'optimizer' in config, 'Cannot find optimizer configuration'
     optimizer_config = config['optimizer']
-    if optimizer_config['mode'] == 'Adam':
+    if optimizer_config['mode'] == 'Adam_SE':
         learning_rate = optimizer_config['learning_rate']
         weight_decay = optimizer_config['weight_decay']
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        model_dict = model.state_dict()
+        dict_name = list(model_dict)
+        for i, p in enumerate(dict_name):
+            print(i, p)
+        for i, p in enumerate(model.parameters()):
+            if i < 65 and i > 43:
+                p.requires_grad = False
+        optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=learning_rate, weight_decay=weight_decay)
         # optimizer = optim.SGD(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    elif optimizer_config['mode'] == 'Adam':
+        learning_rate = optimizer_config['learning_rate']
+        weight_decay = optimizer_config['weight_decay']
+        model_dict = model.state_dict()
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     elif optimizer_config['mode'] == 'SWA':
         learning_rate = optimizer_config['learning_rate']
         weight_decay = optimizer_config['weight_decay']

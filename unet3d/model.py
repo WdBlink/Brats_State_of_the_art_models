@@ -11,7 +11,7 @@ from unet3d.buildingblocks import conv3d, Encoder, Decoder, FinalConv, DoubleCon
     ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock, CaeBlock, unetUp, unetConv3, \
     EncoderModule, DecoderModule, ResEncoderModule, ResDecoderModule, \
     UnetConv3, UnetUp3_CT, UnetGridGatingSignal3, UnetDsv3, GridAttentionBlockND, \
-    MedicaNetBasicBlock, MedicaNetBottleneck, SELayer
+    MedicaNetBasicBlock, MedicaNetBottleneck, SELayer, CapsuleLayer
 
 from unet3d.utils import create_feature_maps
 import torch.nn.functional as F
@@ -1060,6 +1060,205 @@ class NvNet(nn.Module):
         return out_end
 
 
+class SegCaps(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super().__init__()
+        self.conv_1 = nn.Sequential(
+            nn.Conv3d(in_channels, 16, 3, 1, padding=2, bias=False),
+
+        )
+        self.step_1 = nn.Sequential(  # 1/2
+            CapsuleLayer(1, 16, "conv", k=3, s=1, t_1=2, z_1=16, routing=1),
+            CapsuleLayer(2, 16, "conv", k=3, s=1, t_1=4, z_1=16, routing=3),
+        )
+        self.step_2 = nn.Sequential(  # 1/4
+            CapsuleLayer(4, 16, "conv", k=3, s=1, t_1=4, z_1=32, routing=3),
+            CapsuleLayer(4, 32, "conv", k=3, s=1, t_1=8, z_1=32, routing=3)
+        )
+        self.step_3 = nn.Sequential(  # 1/8
+            CapsuleLayer(8, 32, "conv", k=3, s=1, t_1=8, z_1=64, routing=3),
+            CapsuleLayer(8, 64, "conv", k=3, s=1, t_1=8, z_1=32, routing=3)
+        )
+        self.step_4 = CapsuleLayer(8, 32, "deconv", k=3, s=1, t_1=8, z_1=32, routing=3)
+
+        self.step_5 = CapsuleLayer(16, 32, "conv", k=3, s=1, t_1=4, z_1=32, routing=3)
+
+        self.step_6 = CapsuleLayer(4, 32, "deconv", k=3, s=1, t_1=4, z_1=16, routing=3)
+        self.step_7 = CapsuleLayer(8, 16, "conv", k=3, s=1, t_1=4, z_1=16, routing=3)
+        self.step_8 = CapsuleLayer(4, 16, "deconv", k=3, s=1, t_1=2, z_1=16, routing=3)
+        self.step_10 = CapsuleLayer(3, 16, "conv", k=3, s=1, t_1=1, z_1=16, routing=3)
+
+    def forward(self, x):
+        x = F.relu(self.conv_1(x), inplace=True)
+        x.unsqueeze_(1)
+
+        skip_1 = x  # [N,1,16,H,W]
+
+        x = self.step_1(x)
+
+        skip_2 = x  # [N,4,16,H/2,W/2]
+        x = self.step_2(x)
+
+        skip_3 = x  # [N,8,32,H/4,W/4]
+
+        x = self.step_3(x)  # [N,8,32,H/8,W/8]
+
+        x = self.step_4(x)  # [N,8,32,H/4,W/4]
+
+        x = torch.cat((x, skip_3), 1)  # [N,16,32,H/4,W/4]
+
+        x = self.step_5(x)  # [N,4,32,H/4,W/4]
+
+        x = self.step_6(x)  # [N,4,16,H/2,W/2]
+
+        x = torch.cat((x, skip_2), 1)   # [N,8,16,H/2,W/2]
+        x = self.step_7(x)  # [N,4,16,H/2,W/2]
+        x = self.step_8(x)  # [N,2,16,H,W]
+
+        x = torch.cat((x, skip_1), 1)
+        x = self.step_10(x)
+        x.squeeze_(1)
+        v_lens = self.compute_vector_length(x)
+        # v_lens = v_lens.squeeze(1)
+        # output = torch.sigmoid(v_lens)
+        return v_lens
+
+    def compute_vector_length(self, x):
+        out = (x.pow(2)).sum(1, True)+1e-9
+        out = out.sqrt()
+        return out
+
+
+class NoNewCapsNet_step1(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(NoNewCapsNet_step1, self).__init__()
+        channels = 30
+        self.levels = 4
+
+        # create caps encoder levels
+        capsencoderModels = []
+        capsencoderModels.append(EncoderModule(in_channels, channels, False, True))
+        for i in range(self.levels - 2):
+            capsencoderModels.append(EncoderModule(channels * pow(2, i), channels * pow(2, i + 1), True, True))
+        capsencoderModels.append(
+                EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), True, False))
+        self.capsencoders = nn.ModuleList(capsencoderModels)
+
+        # create reconstruct decoder
+        recondecoderModels = []
+        recondecoderModels.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, False))
+        for i in range(self.levels - 2):
+            recondecoderModels.append(DecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
+        recondecoderModels.append(DecoderModule(channels, channels, False, True))
+        self.recondecodersA = nn.ModuleList(recondecoderModels)
+        self.lastConvA = nn.Conv3d(channels, 1, 1, bias=True)
+        self.recondecodersB = nn.ModuleList(recondecoderModels)
+        self.lastConvB = nn.Conv3d(channels, 1, 1, bias=True)
+
+        # create feature fusion
+        self.capsule_layer = CapsuleLayer(2, 240, "conv", k=3, s=1, t_1=1, z_1=240, routing=3)
+        # self.routing_layer = nn.Conv3d(2 * channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 1), 1, bias=True)
+
+    def forward(self, a, b):
+        latent = a
+        for i in range(self.levels):
+            latent = self.capsencoders[i](latent)
+
+        reconstructB = b
+        for i in range(self.levels):
+            reconstructB = self.capsencoders[i](reconstructB)
+
+        reconstructA = latent
+        for i in range(self.levels):
+            reconstructA = self.recondecodersA[i](reconstructA)
+        reconstructA = self.lastConvA(reconstructA)
+
+        for i in range(self.levels):
+            reconstructB = self.recondecodersB[i](reconstructB)
+        reconstructB = self.lastConvB(reconstructB)
+
+        return latent, reconstructA, reconstructB
+
+
+class NoNewCapsNet_step2(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(NoNewCapsNet_step2, self).__init__()
+        channels = 30
+        self.levels = 4
+
+        self.lastConv = nn.Conv3d(channels, out_channels, 1, bias=True)
+
+        # create encoder levels
+        encoderModules = []
+        encoderModules.append(EncoderModule(in_channels, channels, False, True))
+        for i in range(self.levels - 2):
+            encoderModules.append(EncoderModule(channels * pow(2, i), channels * pow(2, i+1), True, True))
+        encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), True, False))
+        self.encoders = nn.ModuleList(encoderModules)
+
+        # create decoder levels
+        decoderModules = []
+        decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, False))
+        for i in range(self.levels - 2):
+            decoderModules.append(DecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
+        decoderModules.append(DecoderModule(channels, channels, False, True))
+        self.decoders = nn.ModuleList(decoderModules)
+
+        # create reconstruct decoder
+        recondecoderModels = []
+        recondecoderModels.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, False))
+        for i in range(self.levels - 2):
+            recondecoderModels.append(DecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
+        recondecoderModels.append(DecoderModule(channels, channels, False, True))
+        self.recondecodersA = nn.ModuleList(recondecoderModels)
+        self.lastConvA = nn.Conv3d(channels, 1, 1, bias=True)
+
+        # create feature fusion
+        self.capsule_layer = CapsuleLayer(2, 240, "conv", k=3, s=1, t_1=1, z_1=240, routing=3)
+        self.conv_fusion = nn.Conv3d(480, 240, 1, bias=True)
+        self.gn_fusion = nn.GroupNorm(2, 240)
+        # self.routing_layer = nn.Conv3d(2 * channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 1), 1, bias=True)
+
+    def forward(self, a, code_flair):
+        inputStack = []
+        for i in range(self.levels):
+            a = self.encoders[i](a)
+            if i < self.levels - 1:
+                inputStack.append(a)
+
+        # a = torch.cat([a.unsqueeze(1), code_flair.unsqueeze(1)], 1)
+        a = torch.cat([a, code_flair], 1)
+        a = F.leaky_relu(self.gn_fusion(self.conv_fusion(a)))
+
+        # a = self.capsule_layer(a)
+        # caps_list = [caps for caps in a.split(1, 1)]
+        # ET = caps_list[0].squeeze(1)
+        # TC = caps_list[1].squeeze(1)
+        # WT = caps_list[0].squeeze(1)
+
+        reconstructA = a
+        for i in range(self.levels):
+            reconstructA = self.recondecodersA[i](reconstructA)
+        reconstructA = self.lastConvA(reconstructA)
+
+        for i in range(self.levels):
+            a = self.decoders[i](a)
+            # TC = self.decoders[i](TC)
+            # WT = self.decoders[i](WT)
+            if i < self.levels - 1:
+                a = a + inputStack.pop()
+
+        a = self.lastConv(a)
+        # TC = self.lastConv(TC)
+        # WT = self.lastConv(WT)
+        seg = torch.sigmoid(a)
+
+        return seg, reconstructA
+
+
 class NoNewNet(nn.Module):
     def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
                  **kwargs):
@@ -1067,7 +1266,7 @@ class NoNewNet(nn.Module):
         channels = 30
         self.levels = 5
 
-        self.lastConv = nn.Conv3d(channels, 3, 1, bias=True)
+        self.lastConv = nn.Conv3d(channels, out_channels, 1, bias=True)
         self.se = SELayer(in_channels)
 
         # create encoder levels
@@ -1078,7 +1277,7 @@ class NoNewNet(nn.Module):
         encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), True, False))
         self.encoders = nn.ModuleList(encoderModules)
 
-        #create decoder levels
+        # create decoder levels
         decoderModules = []
         decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, False))
         for i in range(self.levels - 2):
@@ -1087,7 +1286,7 @@ class NoNewNet(nn.Module):
         self.decoders = nn.ModuleList(decoderModules)
 
     def forward(self, x):
-        x = self.se(x)
+        x, y_out = self.se(x)
         inputStack = []
         for i in range(self.levels):
             x = self.encoders[i](x)
@@ -1101,7 +1300,7 @@ class NoNewNet(nn.Module):
 
         x = self.lastConv(x)
         x = torch.sigmoid(x)
-        return x
+        return x, y_out
 
 
 class ResNoNewNet(nn.Module):

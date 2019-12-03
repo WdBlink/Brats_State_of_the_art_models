@@ -177,6 +177,99 @@ class BratsDiceLoss(nn.Module):
         return dice.mean()
 
 
+class CapsuleLoss(nn.Module):
+    def __init__(self):
+        super(CapsuleLoss, self).__init__()
+
+    def forward(self, output, target):
+        class_loss = (target * F.relu(0.9 - output) + 0.5 * (1 - target) * F.relu(output - 0.1)).mean()
+        return class_loss
+
+
+class ReconstructLoss(nn.Module):
+    def __init__(self):
+        super(ReconstructLoss, self).__init__()
+
+    def forward(self, *input):
+        a = input[0]
+        recon_a = input[1]
+        loss = F.mse_loss(a[:, 3:4, :, :, :], recon_a)
+        return loss, 0
+
+
+class TwoClassLoss(nn.Module):
+    """Dice loss of Brats dataset
+        Args:
+            outputs: A tensor of shape [N, *]
+            labels: A tensor of shape same with predict
+        Returns:
+            Loss tensor according to arg reduction
+        Raise:
+            Exception if unexpected reduction
+        """
+
+    def __init__(self, nonSquared=False, epsilon=1e-5, weight=None, ignore_index=None, sigmoid_normalization=True,
+                 skip_last_target=False):
+        super(TwoClassLoss, self).__init__()
+        self.nonSquared = nonSquared
+
+    def forward(self, outputs, labels):
+        # bring outputs into correct shape
+        wt = outputs
+        s = wt.shape
+        wt = wt.view(s[0], s[2], s[3], s[4])
+
+        # bring masks into correct shape
+        wtMask = labels
+        s = wtMask.shape
+        wtMask = wtMask.view(s[0], s[2], s[3], s[4])
+
+        # calculate losses
+        wtLoss = self.weightedDiceLoss(wt, wtMask, mean=0.05)
+
+        return wtLoss / 5
+
+    def diceLoss(self, pred, target, nonSquared=False):
+        return 1 - self.softDice(pred, target, nonSquared=nonSquared)
+
+    def weightedDiceLoss(self, pred, target, smoothing=1, mean=0.01):
+
+        mean = mean
+        w_1 = 1 / mean ** 2
+        w_0 = 1 / (1 - mean) ** 2
+
+        pred_1 = pred
+        target_1 = target
+        pred_0 = 1 - pred
+        target_0 = 1 - target
+
+        intersection_1 = (pred_1 * target_1).sum(dim=(1, 2, 3))
+        intersection_0 = (pred_0 * target_0).sum(dim=(1, 2, 3))
+        intersection = w_0 * intersection_0 + w_1 * intersection_1
+
+        union_1 = (pred_1).sum() + (target_1).sum()
+        union_0 = (pred_0).sum() + (target_0).sum()
+        union = w_0 * union_0 + w_1 * union_1
+
+        dice = (2 * intersection + smoothing) / (union + smoothing)
+        # fix nans
+        dice[dice != dice] = dice.new_tensor([1.0])
+        return 1 - dice.mean()
+
+    def softDice(self, pred, target, smoothing=1, nonSquared=False):
+        intersection = (pred * target).sum(dim=(1, 2, 3))
+        if nonSquared:
+            union = (pred).sum() + (target).sum()
+        else:
+            union = (pred * pred).sum(dim=(1, 2, 3)) + (target * target).sum(dim=(1, 2, 3))
+        dice = (2 * intersection + smoothing) / (union + smoothing)
+
+        # fix nans
+        dice[dice != dice] = dice.new_tensor([1.0])
+
+        return dice.mean()
+
+
 class BinaryDiceLoss(nn.Module):
     """Dice loss of binary class
     Args:
@@ -417,6 +510,7 @@ class VaeLoss(nn.Module):
         dice_loss = self.dice_loss(unet_out, label)
 
         return boundary_loss + dice_loss + self.weight_L2 * loss_L2 + self.weight_KL * loss_KL
+
 
 def focalLoss(outputs, labels):
 
@@ -862,6 +956,12 @@ def get_loss_criterion(config):
         return CaeLoss()
     elif name == 'CombinedLoss':
         return CombinedLoss()
+    elif name == 'TwoClassLoss':
+        return TwoClassLoss()
+    elif name == 'CapsuleLoss':
+        return CapsuleLoss()
+    elif name == 'ReconstructLoss':
+        return ReconstructLoss()
     else:
         raise RuntimeError(f"Unsupported loss function: '{name}'. Supported losses: {SUPPORTED_LOSSES}")
 

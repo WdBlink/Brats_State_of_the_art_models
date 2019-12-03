@@ -3,11 +3,11 @@ manual_seed: 0
 # model configuration
 model:
   # model class
-  name: NoNewNet
+  name: SegCaps
   # number of input channels to the model
-  in_channels: 6
+  in_channels: 4
   # number of output channels
-  out_channels: 3
+  out_channels: 1
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
   layer_order: cgr
   # feature maps scale factor
@@ -19,17 +19,17 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/templateMinusChannelAddition_dataaug=True_NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/
+  checkpoint_dir: /home/dell/github/pytorch-3dunet/checkpoints/capsule_WT/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
-  resume: /home/server/github/pytorch-3dunet/checkpoints/templateChannelAddition_dataaug=True_NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/epoch96_checkpoint.pytorch
+  resume: null
   # fine-tune a given pre-trained model
   pre_trained: null
   # output test result model
-  test_model: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint2.pytorch
+  test_model: /home/dell/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint2.pytorch
   # how many iterations between validations
-  validate_after_iters: 300
+  validate_after_iters: 200
   # how many iterations between tensorboard logging
-  log_after_iters: 300
+  log_after_iters: 200
   # max number of epochs
   epochs: 200
   # max number of iterations
@@ -41,20 +41,20 @@ optimizer:
   #mode
   mode: Adam
   # initial learning rate
-  learning_rate: 0.00005
+  learning_rate: 0.0001
   # weight decay
   weight_decay: 0.00003
 # loss function configuration
 loss:
   # loss function to be used during training
-  name: DiceLoss_SurfaceLoss
+  name: TwoClassLoss
   # A manual rescaling weight given to each class.
   loss_weight: null
   # a target value that is ignored and does not contribute to the input gradient
   ignore_index: null
 # evaluation metric configuration
 eval_metric:
-  name: Dice
+  name: TwoClassDice
   # a target label that is ignored during metric evaluation
   ignore_index: null
 lr_scheduler:
@@ -67,10 +67,10 @@ lr_scheduler:
 #  name: ReduceLROnPlateau
 #  factor: 0.2
 #  patience: 180
-# data loaders configuration
+# data loaders co;nfiguration
 loaders:
   # batch size
-  batch_size: 2
+  batch_size: 1
   # if use Mix Up
   mixup: False
   # if use data augment
@@ -89,16 +89,18 @@ loaders:
   label_internal_path: label
   # paths to the training datasets
   train_path:
-    - '/home/server/BraTS19_preprocessing/training/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
+    - '/home/dell/data/Brats19/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
   # paths to the validation datasets
   val_path:
-    - '/home/server/BraTS19_preprocessing/training/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
+    - '/home/dell/data/Brats19/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
   test_path:
-    - '/home/server/BraTS19_preprocessing/validation/data_3D.hdf5'
+    - '/home/dell/data/Brats19/data_3D.hdf5'
   dataset_path:
-    - '/home/server/data'
+    - '/home/dell/data'
   pred_path:
-    - '/home/server/BraTS19_preprocessing/validation/'
+    - '/home/dell/data/Brats19/'
+  template_path:
+    - '/home/dell/data/Brats19/MixupData.nii.gz'
   # how many subprocesses to use for data loading
   num_workers: 0
   # data transformations/augmentations

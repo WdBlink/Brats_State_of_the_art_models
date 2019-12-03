@@ -47,7 +47,7 @@ class UNet3DTrainer:
                  max_num_epochs=100, max_num_iterations=1e5,
                  validate_after_iters=100, log_after_iters=100,
                  validate_iters=None, num_iterations=0, num_epoch=0,
-                 eval_score_higher_is_better=True, best_eval_score=None,
+                 eval_score_higher_is_better=False, best_eval_score=None,
                  logger=None):
         # if logger is None:
         #     self.logger = utils.get_logger('VaeUnetTrainer', level=logging.DEBUG)
@@ -165,8 +165,8 @@ class UNet3DTrainer:
             True if the training should be terminated immediately, False otherwise
         """
         train_losses = utils.RunningAverage()
-        train_eval_scores_multi = utils.RunningAverageMulti()
-        train_eval_scores_duality = utils.RunningAverageDuality()
+
+        torch.save(self.model, '/home/dell/T2.pkl')
 
         # make predictions
         # self.makePredictions(self.loaders['challenge'])
@@ -181,14 +181,14 @@ class UNet3DTrainer:
                 f'Batch {i}. '
                 f'Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
 
-            input, pid, target = self._split_training_batch(t)
+            a, pid, b = self._split_training_batch(t)
 
-            output, loss, feature_maps, channel_weight = self._forward_pass(input, target, weight=None)
+            recon_a, recon_b, loss = self._forward_pass(a, b, weight=None)
 
             # output_sample = output[0, 1, :, :, 80].cpu().detach().numpy()
             # self.draw_picture(output_sample)
-
-            train_losses.update(loss.item(), self._batch_size(input))
+            self.logger.info(f'Reconstruct loss is {loss}')
+            train_losses.update(loss.item(), self._batch_size(a))
 
             # compute gradients and update parameters
             self.optimizer.zero_grad()
@@ -224,28 +224,16 @@ class UNet3DTrainer:
             if self.num_iterations % self.log_after_iters == 0:
                 # if model contains final_activation layer for normalizing logits apply it, otherwise both
                 # the evaluation metric as well as images in tensorboard will be incorrectly computed
-                if hasattr(self.model, 'final_activation'):
-                    output = self.model.final_activation(output)
 
                 # visualize the feature map to tensorboard
-                board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
+                board_list = [a[0:1, 1:4, :, :, a.size(4)//2], recon_a[0:1, :, :, :, recon_a.size(4)//2],
+                              recon_b[0:1, :, :, :, recon_b.size(4)//2]]
                 board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
-                if self.model_name == 'NNNet_Cae':
-                    for i, t in enumerate(feature_maps):
-                        board_add_image(self.writer, f'feature_map{i}', t, self.num_iterations)
-                    # board_add_images(self.writer, 'feature_map', feature_maps, self.num_iterations)
-
-                # compute eval criterion
-                eval_score = self.eval_criterion(output, target)
-
-                train_eval_scores_duality.update(eval_score, self._batch_size(input))
 
                 # log stats, params and images
                 self.logger.info(
                     f'Training stats.\n'
-                    f'Train_Loss: {train_losses.avg}. \n'
-                    f'Train_ET:{train_eval_scores_multi.dice_WT}, \n'
-                    f'channel_weight:{channel_weight.cpu().detach().numpy().tolist()}')
+                    f'Train_Loss: {train_losses.avg}. ')
 
             if self.max_num_iterations < self.num_iterations:
                 self.logger.info(
@@ -274,10 +262,6 @@ class UNet3DTrainer:
         # save checkpoint
         self._save_checkpoint(is_best)
 
-        # make challenge predict
-        if eval_score > 0.90:
-            self.makePredictions(self.loaders['challenge'])
-
         return False
 
     def validate(self, val_loader):
@@ -285,7 +269,6 @@ class UNet3DTrainer:
 
         val_losses = utils.RunningAverage()
         # val_scores = utils.RunningAverage()
-        val_scores_duality = utils.RunningAverageDuality()
 
         try:
             # set the model in evaluation mode; final_activation doesn't need to be called explicitly
@@ -294,32 +277,27 @@ class UNet3DTrainer:
                 for i, t in enumerate(val_loader):
                     self.logger.info(f'Validation iteration {i}')
 
-                    input, pid, target = self._split_training_batch(t)
+                    a, pid, b = self._split_training_batch(t)
 
-                    output, loss, feature_map, channel_weight = self._forward_pass(input, target, mode='val', weight=None)
-                    val_losses.update(loss.item(), self._batch_size(input))
+                    recon_a, recon_b, loss = self._forward_pass(a, b, mode='val', weight=None)
+                    val_losses.update(loss.item(), self._batch_size(a))
 
-                    eval_score = self.eval_criterion(output, target)
+                    # # print the bad guy
+                    # if eval_score[0] < 0.5:
+                    #     wt_gt = (target[:, 0, ...] == 1).sum()
+                    #     # tc_gt = (target[:, 1, ...] == 1).sum()
+                    #     # et_gt = (target[:, 2, ...] == 1).sum()
+                    #
+                    #     wt_pred = (output[:, 0, ...] >= 0.5).sum()
+                    #     # tc_pred = (output[:, 1, ...] >= 0.5).sum()
+                    #     # et_pred = (output[:, 2, ...] >= 0.5).sum()
+                    #     self.logger.info(f'The patient {pid} score is {eval_score}!!!\n'
+                    #                      f'The pixel of ET_GT|ET_OUT is {wt_gt}|{wt_pred}\n')
 
-                    # print the bad guy
-                    if eval_score[0] < 0.5:
-                        wt_gt = (target[:, 0, ...] == 1).sum()
-                        # tc_gt = (target[:, 1, ...] == 1).sum()
-                        # et_gt = (target[:, 2, ...] == 1).sum()
-
-                        wt_pred = (output[:, 0, ...] >= 0.5).sum()
-                        # tc_pred = (output[:, 1, ...] >= 0.5).sum()
-                        # et_pred = (output[:, 2, ...] >= 0.5).sum()
-                        self.logger.info(f'The patient {pid} score is {eval_score}!!!\n'
-                                         f'The pixel of ET_GT|ET_OUT is {wt_gt}|{wt_pred}\n')
-
-
-                    # val_scores.update(eval_score.item(), self._batch_size(input))
-                    val_scores_duality.update(eval_score, self._batch_size(input))
 
                     # visualize the feature map to tensorboard
-                    board_list = [input[0:1, 1:4, :, :, input.size(4)//2], output[0:1, :, :, :, output.size(4)//2],
-                                  target[0:1, :, :, :, target.size(4)//2]]
+                    board_list = [a[0:1, 1:2, :, :, a.size(4)//2], recon_a[0:1, :, :, :, recon_a.size(4)//2],
+                                  recon_b[0:1, :, :, :, recon_b.size(4)//2]]
                     board_add_images(self.writer, 'validate_output', board_list, self.num_iterations)
 
                     if self.validate_iters is not None and self.validate_iters <= i:
@@ -327,12 +305,9 @@ class UNet3DTrainer:
                         break
 
                 self.logger.info(f'Validation finished. \n'
-                                 f'Loss: {val_losses.avg} \n'
-                                 f'Evaluation score \n'
-                                 f'Val_ET:{val_scores_duality.dice_WT} \n'
-                                 f'Val_sensitivity ET:{val_scores_duality.sens_WT}')
+                                 f'Val_Loss: {val_losses.avg}')
 
-                return val_scores_duality.dice_WT
+                return val_losses.avg
         finally:
             # set back in training mode
             self.model.train()
@@ -412,30 +387,11 @@ class UNet3DTrainer:
 
     def _forward_pass(self, input, target, mode='train', weight=None):
         # forward pass
-        output, channel_weight = self.model(input)
-        feature_maps = []
+        latent, recon_a, recon_b = self.model(input, target)
         # compute the loss
-        if self.model_name == 'NvNet':
-            loss = self.loss_criterion(input, output[0], output[1], target)
-            output = output[0][:, :3, :, :, :]
-        elif self.model_name == 'NNNet_Cae':
-            loss = self.loss_criterion(input, target, output[0], output[1])
-            if mode == 'train':
-                cae_out = output[1]
-                for i, t in enumerate(output[2]):
-                    size = t.size(4)
-                    channel = t.size(1)
-                    t = torch.sum(t, dim=1, keepdim=True)//channel
-                    feature_maps.append(t[:, :, :, :, size//2])
-                feature_maps.append(cae_out[:, :, :, :, cae_out.size(4)//2])
-            output = output[0]
-        else:
-            if weight is None:
-                loss = self.loss_criterion(output, target)
-            else:
-                loss = self.loss_criterion(output, target, weight)
+        loss = self.loss_criterion(input, recon_a, target, recon_b)
 
-        return output, loss, feature_maps, channel_weight
+        return recon_a, recon_b, loss
 
     def _is_best_eval_score(self, eval_score):
         if self.eval_score_higher_is_better:

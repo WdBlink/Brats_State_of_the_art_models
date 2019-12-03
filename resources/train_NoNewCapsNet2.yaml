@@ -3,11 +3,11 @@ manual_seed: 0
 # model configuration
 model:
   # model class
-  name: SegCaps
+  name: NoNewCapsNet
   # number of input channels to the model
   in_channels: 4
   # number of output channels
-  out_channels: 3
+  out_channels: 1
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
   layer_order: cgr
   # feature maps scale factor
@@ -19,15 +19,15 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/capsule_WT/
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/step1/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # fine-tune a given pre-trained model
   pre_trained: null
   # output test result model
-  test_model: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint2.pytorch
+  test_model: /home/dell/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint2.pytorch
   # how many iterations between validations
-  validate_after_iters: 100
+  validate_after_iters: 200
   # how many iterations between tensorboard logging
   log_after_iters: 100
   # max number of epochs
@@ -47,7 +47,7 @@ optimizer:
 # loss function configuration
 loss:
   # loss function to be used during training
-  name: TwoClassLoss
+  name: ReconstructLoss
   # A manual rescaling weight given to each class.
   loss_weight: null
   # a target value that is ignored and does not contribute to the input gradient
@@ -67,12 +67,12 @@ lr_scheduler:
 #  name: ReduceLROnPlateau
 #  factor: 0.2
 #  patience: 180
-# data loaders configuration
+# data loaders co;nfiguration
 loaders:
   # batch size
   batch_size: 1
   # if use Mix Up
-  mixup: False
+  mixup: True
   # if use data augment
   data_aug: True
   # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
@@ -96,7 +96,7 @@ loaders:
   test_path:
     - '/home/server/BraTS19_preprocessing/validation/data_3D.hdf5'
   dataset_path:
-    - '/home/server/data'
+    - '/home/dell/data'
   pred_path:
     - '/home/server/BraTS19_preprocessing/validation/'
   template_path:

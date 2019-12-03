@@ -123,8 +123,9 @@ class FilterSliceBuilder(SliceBuilder):
 
 
 class BratsDataset(torch.utils.data.Dataset):
-    #mode must be trian, test or val
-    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False, doMixUp=True, data_aug = True):
+    # mode must be trian, test or val
+    def __init__(self, filePath, mode="train", randomCrop=None, hasMasks=True, returnOffsets=False, doMixUp=True,
+                 template=None, data_aug=True):
         super(BratsDataset, self).__init__()
         self.filePath = filePath
         self.mode = mode
@@ -136,7 +137,7 @@ class BratsDataset(torch.utils.data.Dataset):
         self.doMixUp = doMixUp
         self.aug = data_aug
 
-        #augmentation settings
+        # augmentation settings
         self.nnAugmentation = True
         self.softAugmentation = False
         self.doRotate = True
@@ -148,25 +149,33 @@ class BratsDataset(torch.utils.data.Dataset):
         self.sigma = 10
         self.doIntensityShift = True
         self.maxIntensityShift = 0.1
-        graph_brain, _, _ = load_nii('/home/server/BraTS19_preprocessing/training/MixupData.nii.gz')
+        graph_brain, _, _ = load_nii(template)
         self.graph_brain = np.transpose(graph_brain, (1, 2, 3, 0))
 
     def __getitem__(self, index):
 
-        #lazily open file
+        # lazily open file
         self.openFileIfNotOpen()
 
-        #load from hdf5 file
+        # load from hdf5 file
         image = self.file["images_" + self.mode][index, ...]
         if self.hasMasks: labels = self.file["masks_" + self.mode][index, ...]
 
         # Prepare data depeinding on soft/hard augmentation scheme
         if not self.nnAugmentation:
             if not self.trainOriginalClasses and (self.mode != "train" or self.softAugmentation):
-                if self.hasMasks: labels = self._toEvaluationOneHot(labels)
+                if self.hasMasks:
+                    et_labels = self._toEvaluationTwoClassification(labels, subrigon='ET')
+                    tc_labels = self._toEvaluationTwoClassification(labels, subrigon='TC')
+                    wt_labels = self._toEvaluationTwoClassification(labels, subrigon='WT')
+                    bg_labels = self._toEvaluationTwoClassification(labels, subrigon='BG')
                 defaultLabelValues = np.zeros(3, dtype=np.float32)
             else:
-                if self.hasMasks: labels = self._toOrignalCategoryOneHot(labels)
+                if self.hasMasks:
+                    et_labels = self._toEvaluationTwoClassification(labels, subrigon='ET')
+                    tc_labels = self._toEvaluationTwoClassification(labels, subrigon='TC')
+                    wt_labels = self._toEvaluationTwoClassification(labels, subrigon='WT')
+                    bg_labels = self._toEvaluationTwoClassification(labels, subrigon='BG')
                 defaultLabelValues = np.asarray([1, 0, 0, 0, 0], dtype=np.float32)
         elif self.hasMasks:
             if labels.ndim < 4:
@@ -174,13 +183,20 @@ class BratsDataset(torch.utils.data.Dataset):
             defaultLabelValues = np.asarray([0], dtype=np.float32)
 
         if self.nnAugmentation:
-            if self.hasMasks: labels = self._toEvaluationOneHot(np.squeeze(labels, 3))
+            if self.hasMasks:
+                et_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='ET')
+                tc_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='TC')
+                wt_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='WT')
+                bg_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='BG')
         else:
             if self.mode == "train" and not self.softAugmentation and not self.trainOriginalClasses and self.hasMasks:
                 labels = self._toOrdinal(labels)
-                labels = self._toEvaluationOneHot(labels)
+                et_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='ET')
+                tc_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='TC')
+                wt_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='WT')
+                bg_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='BG')
 
-        if self.mode == 'train' and self.doMixUp:
+        if self.doMixUp:
             datasize = self.file["images_" + self.mode].shape[0]
             idx = np.random.randint(0, datasize)
             image2 = self.file["images_" + self.mode][idx, ...]
@@ -206,56 +222,70 @@ class BratsDataset(torch.utils.data.Dataset):
                     labels2 = self._toOrdinal(labels2)
                     labels2 = self._toEvaluationOneHot(labels2)
 
-            m1 = 0.5
-            m2 = 0.5
-            m3 = 0.5
-            alpha = 0.4
-            lam = np.random.beta(alpha, alpha)
-            image = lam * image + (1 - lam) * image2
+            # random crop
+            if not self.randomCrop is None:
+                shape = image2.shape
+                x = random.randint(0, shape[0] - self.randomCrop[0])
+                y = random.randint(0, shape[1] - self.randomCrop[1])
+                z = random.randint(0, shape[2] - self.randomCrop[2])
+                image2 = image2[x:x + self.randomCrop[0], y:y + self.randomCrop[1], z:z + self.randomCrop[2], :]
+                if self.hasMasks: labels2 = labels2[x:x + self.randomCrop[0], y:y + self.randomCrop[1],
+                                           z:z + self.randomCrop[2], :]
+            image2 = np.transpose(image2, (3, 0, 1, 2))  # bring into NCWH format
 
-            target = np.zeros_like(labels)
-            # if lam > m1:
-            #     target[..., 0] = target[..., 0] + labels[..., 0]
-            # if (1 - lam) > m1:
-            #     target[..., 0] = target[..., 0] + labels2[..., 0]
-            target[..., 0] = target[..., 0] + lam * labels[..., 0] + (1 - lam) * labels2[..., 0]
+            # m1 = 0.5
+            # m2 = 0.5
+            # m3 = 0.5
+            # alpha = 0.4
+            # lam = np.random.beta(alpha, alpha)
+            # image = lam * image + (1 - lam) * image2
+            #
+            # target = np.zeros_like(labels)
+            # # if lam > m1:
+            # #     target[..., 0] = target[..., 0] + labels[..., 0]
+            # # if (1 - lam) > m1:
+            # #     target[..., 0] = target[..., 0] + labels2[..., 0]
+            # target[..., 0] = target[..., 0] + lam * labels[..., 0] + (1 - lam) * labels2[..., 0]
+            #
+            # # if lam > m2:
+            # #     target[..., 1] = target[..., 1] + labels[..., 1]
+            # # if (1 - lam) > m2:
+            # #     target[..., 1] = target[..., 1] + labels2[..., 1]
+            # target[..., 1] = target[..., 1] + lam * labels[..., 1] + (1 - lam) * labels2[..., 1]
+            #
+            # # if lam > m3:
+            # #     target[..., 2] = target[..., 2] + labels[..., 2]
+            # # if (1 - lam) > m3:
+            # #     target[..., 2] = target[..., 2] + labels2[..., 2]
+            # target[..., 2] = target[..., 2] + lam * labels[..., 2] + (1 - lam) * labels2[..., 2]
+            #
+            # target[target > 1] = 1
+            # labels = target
 
-            # if lam > m2:
-            #     target[..., 1] = target[..., 1] + labels[..., 1]
-            # if (1 - lam) > m2:
-            #     target[..., 1] = target[..., 1] + labels2[..., 1]
-            target[..., 1] = target[..., 1] + lam * labels[..., 1] + (1 - lam) * labels2[..., 1]
+        # # templateChannelAddition
+        # minus = image - self.graph_brain
+        # result = np.clip(np.abs(minus), 1, 255)
+        # image = np.concatenate((image, result[:, :, :, 0:1]), 3)
+        # image = np.concatenate((image, result[:, :, :, 3:4]), 3)
 
-            # if lam > m3:
-            #     target[..., 2] = target[..., 2] + labels[..., 2]
-            # if (1 - lam) > m3:
-            #     target[..., 2] = target[..., 2] + labels2[..., 2]
-            target[..., 2] = target[..., 2] + lam * labels[..., 2] + (1 - lam) * labels2[..., 2]
-
-            target[target > 1] = 1
-            labels = target
-
-        # templateChannelAddition
-        minus = image - self.graph_brain
-        result = np.clip(np.abs(minus), 1, 255)
-        image = np.concatenate((image, result[:, :, :, 0:1]), 3)
-        image = np.concatenate((image, result[:, :, :, 3:4]), 3)
-
+        label_list = [et_labels, tc_labels, wt_labels, bg_labels]
         # augment data
-        if self.mode == "train" and self.aug is True:
-            image, labels = aug.augment3DImage(image,
-                                               labels,
-                                               defaultLabelValues,
-                                               self.nnAugmentation,
-                                               self.doRotate,
-                                               self.rotDegrees,
-                                               self.doScale,
-                                               self.scaleFactor,
-                                               self.doFlip,
-                                               self.doElasticAug,
-                                               self.sigma,
-                                               self.doIntensityShift,
-                                               self.maxIntensityShift)
+        for i, labels in enumerate(label_list):
+            if self.mode == "train" and self.aug is True:
+                image, labels = aug.augment3DImage(image,
+                                                   labels,
+                                                   defaultLabelValues,
+                                                   self.nnAugmentation,
+                                                   self.doRotate,
+                                                   self.rotDegrees,
+                                                   self.doScale,
+                                                   self.scaleFactor,
+                                                   self.doFlip,
+                                                   self.doElasticAug,
+                                                   self.sigma,
+                                                   self.doIntensityShift,
+                                                   self.maxIntensityShift)
+                label_list[i] = labels
 
         # random crop
         if not self.randomCrop is None:
@@ -264,20 +294,25 @@ class BratsDataset(torch.utils.data.Dataset):
             y = random.randint(0, shape[1] - self.randomCrop[1])
             z = random.randint(0, shape[2] - self.randomCrop[2])
             image = image[x:x+self.randomCrop[0], y:y+self.randomCrop[1], z:z+self.randomCrop[2], :]
-            if self.hasMasks: labels = labels[x:x + self.randomCrop[0], y:y + self.randomCrop[1], z:z + self.randomCrop[2], :]
-
+            if self.hasMasks:
+                for i, labels in enumerate(label_list):
+                    labels = labels[x:x + self.randomCrop[0], y:y + self.randomCrop[1], z:z + self.randomCrop[2], :]
+                    label_list[i] = labels
         image = np.transpose(image, (3, 0, 1, 2))  # bring into NCWH format
-        if self.hasMasks: labels = np.transpose(labels, (3, 0, 1, 2))  # bring into NCWH format
-
+        if self.hasMasks:
+            for i, labels in enumerate(label_list):
+                labels = np.transpose(labels, (3, 0, 1, 2))  # bring into NCWH format
+                label_list[i] = labels
         # to tensor
         #image = image[:, 0:32, 0:32, 0:32]
         # image = self.make_crop(image)
         image = torch.from_numpy(image)
         if self.hasMasks:
-            #labels = labels[:, 0:32, 0:32, 0:32]
-            labels = torch.from_numpy(labels)
+            for i, labels in enumerate(label_list):
+                labels = torch.from_numpy(labels)
+                label_list[i] = labels
 
-        #get pid
+        # get pid
         pid = self.file["pids_" + self.mode][index]
 
         if self.returnOffsets:
@@ -285,17 +320,17 @@ class BratsDataset(torch.utils.data.Dataset):
             yOffset = self.file["yOffsets_" + self.mode][index]
             zOffset = self.file["zOffsets_" + self.mode][index]
             if self.hasMasks:
-                return image, str(pid), labels, xOffset, yOffset, zOffset
+                return image, str(pid), image2, xOffset, yOffset, zOffset
             else:
                 return image, pid, xOffset, yOffset, zOffset
         else:
             if self.hasMasks:
-                return image, str(pid), labels
+                return image, str(pid), image2, label_list[0], label_list[1], label_list[2], label_list[3]
             else:
                 return image, pid
 
     def __len__(self):
-        #lazily open file
+        # lazily open file
         self.openFileIfNotOpen()
 
         return self.file["images_" + self.mode].shape[0]
@@ -310,6 +345,19 @@ class BratsDataset(torch.utils.data.Dataset):
         out[:, :, :, 0] = (labels != 0)
         out[:, :, :, 1] = (labels != 0) * (labels != 2)
         out[:, :, :, 2] = (labels == 4)
+        return out
+
+    def _toEvaluationTwoClassification(self, labels, subrigon):
+        shape = labels.shape
+        out = np.zeros([shape[0], shape[1], shape[2], 1], dtype=np.float32)
+        if subrigon == 'ET':
+            out[:, :, :, 0] = (labels == 4)
+        elif subrigon == 'TC':
+            out[:, :, :, 0] = (labels != 0) * (labels != 2)
+        elif subrigon == 'WT':
+            out[:, :, :, 0] = (labels != 0)
+        elif subrigon == 'BG':
+            out[:, :, :, 0] = (labels == 0)
         return out
 
     def _toOrignalCategoryOneHot(self, labels):
@@ -362,7 +410,7 @@ class HDF5Dataset(Dataset):
             # File "h5py/_proxy.pyx", line 84, in h5py._proxy.H5PY_H5Dread
             # OSError: Can't read data (inflate() failed)
             self.raws = [input_file[internal_path][...] for internal_path in raw_internal_path]
-            # calculate global mean and std for Normalization augmentation
+            # calculate global mean and std for Normalizati                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               on augmentation
             mean, std = self._calculate_mean_std(self.raws[0])
 
             self.transformer = transforms.get_transformer(transformer_config, mean, std, phase)
@@ -509,26 +557,27 @@ def get_brats_train_loaders(config):
     # train_datasets = BraTSDataset(brats, train_ids, phase='train',
     #                               transformer_config=loaders_config['transformer'],
     #                               is_mixup=loaders_config['mixup'])
-    train_datasets = BratsDataset(train_path[0], randomCrop=[128, 128, 128], doMixUp=loaders_config['mixup'], data_aug=loaders_config['data_aug'])
+    train_datasets = BratsDataset(train_path[0], randomCrop=[88, 88, 88], doMixUp=loaders_config['mixup'],
+                                  data_aug=loaders_config['data_aug'], template=loaders_config['template_path'][0])
 
     logger.info(f'Loading validation set from: {val_path}...')
     # brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train
     # val_datasets = BraTSDataset(brats, validation_ids, phase='val',
     #                             transformer_config=loaders_config['transformer'],
     #                             is_mixup=False)
-    val_datasets = BratsDataset(val_path[0], mode='validation')
+    val_datasets = BratsDataset(val_path[0], mode='validation', template=loaders_config['template_path'][0])
 
     num_workers = loaders_config.get('num_workers', 1)
     logger.info(f'Number of workers for train/val datasets: {num_workers}')
     # when training with volumetric data use batch_size of 1 due to GPU memory constraints
 
-    challengeValset = BratsDataset(loaders_config['test_path'][0], mode="validation", hasMasks=False, returnOffsets=True)
+    challengeValset = BratsDataset(loaders_config['test_path'][0], mode="validation", hasMasks=False,
+                                   returnOffsets=True, template=loaders_config['template_path'][0])
 
     return {
         'train': DataLoader(train_datasets, batch_size=loaders_config['batch_size'], shuffle=True, num_workers=num_workers),
         'val': DataLoader(val_datasets, batch_size=1, shuffle=True, num_workers=num_workers),
-        'challenge': DataLoader(challengeValset, batch_size=1, shuffle=False, pin_memory=True,
-                                                     num_workers=1)
+        'challenge': DataLoader(challengeValset, batch_size=1, shuffle=False, pin_memory=True, num_workers=1)
     }
 #
 # import os
