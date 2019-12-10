@@ -4,6 +4,7 @@ import os
 import numpy as np
 import torch
 import datetime
+import torch.nn.functional as F
 from unet3d.config import load_config
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -181,9 +182,12 @@ class UNet3DTrainer:
                 f'Batch {i}. '
                 f'Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
 
-            input, pid, target = self._split_training_batch(t)
-
-            output, loss, feature_maps, channel_weight = self._forward_pass(input, target, weight=None)
+            input, pid, target, augmix1, mixlabel1, augmix2, mixlabel2 = self._split_training_batch(t)
+            im_tuple = (input, augmix1, augmix2)
+            label_tuple = (target, mixlabel1, mixlabel2)
+            images = torch.cat(im_tuple, 0)
+            labels = torch.cat(label_tuple, 0)
+            output, loss, feature_maps, channel_weight = self._forward_pass(images, labels, weight=None)
 
             # output_sample = output[0, 1, :, :, 80].cpu().detach().numpy()
             # self.draw_picture(output_sample)
@@ -228,7 +232,7 @@ class UNet3DTrainer:
                     output = self.model.final_activation(output)
 
                 # visualize the feature map to tensorboard
-                board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
+                board_list = [input[0:1, 1:2, :, :, 64], augmix1[0:1, 1:2, :, :, 64], augmix2[0:1, 1:2, :, :, 64]]
                 board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
                 if self.model_name == 'NNNet_Cae':
                     for i, t in enumerate(feature_maps):
@@ -294,7 +298,7 @@ class UNet3DTrainer:
                 for i, t in enumerate(val_loader):
                     self.logger.info(f'Validation iteration {i}')
 
-                    input, pid, target = self._split_training_batch(t)
+                    input, pid, target = self._split_validation_batch(t)
 
                     output, loss, feature_map, channel_weight = self._forward_pass(input, target, mode='val', weight=None)
                     val_losses.update(loss.item(), self._batch_size(input))
@@ -399,6 +403,23 @@ class UNet3DTrainer:
         def _move_to_device(input):
             if isinstance(input, tuple) or isinstance(input, list):
 
+                return tuple([_move_to_device(input[0]), input[1], _move_to_device(input[2]), _move_to_device(input[3]),
+                              _move_to_device(input[4]), _move_to_device(input[5]), _move_to_device(input[6])])
+            else:
+                return input.to(self.device, dtype=torch.float)
+
+        t = _move_to_device(t)
+        if len(t) == 2:
+            input, target = t
+            return input, target
+        else:
+            input, pid, target, augmix1, mixlabel1, augmix2, mixlabel2 = t
+            return input, pid, target, augmix1, mixlabel1, augmix2, mixlabel2
+
+    def _split_validation_batch(self, t):
+        def _move_to_device(input):
+            if isinstance(input, tuple) or isinstance(input, list):
+
                 return tuple([_move_to_device(input[0]), input[1], _move_to_device(input[2])])
             else:
                 return input.to(self.device, dtype=torch.float)
@@ -406,9 +427,10 @@ class UNet3DTrainer:
         t = _move_to_device(t)
         if len(t) == 2:
             input, target = t
+            return input, target
         else:
             input, pid, target = t
-        return input, pid, target
+            return input, pid, target
 
     def _forward_pass(self, input, target, mode='train', weight=None):
         # forward pass
@@ -431,7 +453,23 @@ class UNet3DTrainer:
             output = output[0]
         else:
             if weight is None:
-                loss = self.loss_criterion(output, target)
+                if mode == 'train':
+                    logits_clean, logits_aug1, logits_aug2 = torch.split(output, output[0].size(0))
+                    target_clean, mix_label1, mix_label2 = torch.split(target, target[0].size(0))
+                    loss = self.loss_criterion(logits_clean, target_clean)
+
+                    p_clean, p_aug1, p_aug2 = F.softmax(
+                        logits_clean, dim=1), F.softmax(
+                        logits_aug1, dim=1), F.softmax(
+                        logits_aug2, dim=1)
+
+                    # Clamp mixture distribution to avoid exploding KL divergence
+                    p_mixture = torch.clamp((p_clean + p_aug1 + p_aug2) / 3., 1e-7, 1).log()
+                    loss += 12 * (F.kl_div(p_mixture, p_clean, reduction='batchmean') +
+                                  F.kl_div(p_mixture, p_aug1, reduction='batchmean') +
+                                  F.kl_div(p_mixture, p_aug2, reduction='batchmean')) / 3.
+                else:
+                    loss = self.loss_criterion(output, target)
             else:
                 loss = self.loss_criterion(output, target, weight)
 

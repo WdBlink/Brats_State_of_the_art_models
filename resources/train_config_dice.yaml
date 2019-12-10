@@ -3,11 +3,11 @@ manual_seed: 0
 # model configuration
 model:
   # model class
-  name: SegCaps
+  name: NoNewNet
   # number of input channels to the model
   in_channels: 4
   # number of output channels
-  out_channels: 3
+  out_channels: 1
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
   layer_order: cgr
   # feature maps scale factor
@@ -19,7 +19,7 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/capsule_WT/
+  checkpoint_dir: /home/server/github/pytorch-3dunet/checkpoints/AugMix_GN_batchsize=1_[128, 128, 128]_WT/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # fine-tune a given pre-trained model
@@ -27,9 +27,9 @@ trainer:
   # output test result model
   test_model: /home/server/github/pytorch-3dunet/checkpoints/NoNewNet_Adam_batchsize=2_newdiceloss_DataAug/2019-08-13.21:57_model_NoNewNet/last_checkpoint2.pytorch
   # how many iterations between validations
-  validate_after_iters: 100
+  validate_after_iters: 200
   # how many iterations between tensorboard logging
-  log_after_iters: 100
+  log_after_iters: 200
   # max number of epochs
   epochs: 200
   # max number of iterations
@@ -39,7 +39,7 @@ trainer:
 # optimizer configuration
 optimizer:
   #mode
-  mode: Adam
+  mode: look_ahead
   # initial learning rate
   learning_rate: 0.0001
   # weight decay
@@ -72,7 +72,7 @@ loaders:
   # batch size
   batch_size: 1
   # if use Mix Up
-  mixup: False
+  mixup: True
   # if use data augment
   data_aug: True
   # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)

@@ -12,9 +12,10 @@ from unet3d.losses import get_loss_criterion
 from unet3d.metrics import get_evaluation_metric
 from unet3d.model import get_model
 # from unet3d.trainer import UNet3DTrainer
-from unet3d.NoNewCaps_trainer2 import UNet3DTrainer
+from unet3d.trainer import UNet3DTrainer
 from unet3d.utils import get_logger
 from unet3d.utils import get_number_of_learnable_parameters
+from  preprocess.lookahead import Lookahead
 
 from MedicalNet.model import generate_model
 from MedicalNet import config as MedConfig
@@ -77,6 +78,11 @@ def _create_optimizer(config, model):
         weight_decay = optimizer_config['weight_decay']
         model_dict = model.state_dict()
         optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    elif optimizer_config['mode'] == 'look_ahead':
+        learning_rate = optimizer_config['learning_rate']
+        weight_decay = optimizer_config['weight_decay']
+        base_opt = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(0.9, 0.999))
+        optimizer = Lookahead(base_opt, k=5, alpha=0.5)
     elif optimizer_config['mode'] == 'SWA':
         learning_rate = optimizer_config['learning_rate']
         weight_decay = optimizer_config['weight_decay']

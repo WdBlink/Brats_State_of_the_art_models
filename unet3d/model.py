@@ -11,7 +11,7 @@ from unet3d.buildingblocks import conv3d, Encoder, Decoder, FinalConv, DoubleCon
     ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock, CaeBlock, unetUp, unetConv3, \
     EncoderModule, DecoderModule, ResEncoderModule, ResDecoderModule, \
     UnetConv3, UnetUp3_CT, UnetGridGatingSignal3, UnetDsv3, GridAttentionBlockND, \
-    MedicaNetBasicBlock, MedicaNetBottleneck, SELayer, CapsuleLayer
+    MedicaNetBasicBlock, MedicaNetBottleneck, SELayer, CapsuleLayer, OctaveConv, Conv_BN, Conv_BN_ACT
 
 from unet3d.utils import create_feature_maps
 import torch.nn.functional as F
@@ -1217,7 +1217,7 @@ class NoNewCapsNet_step2(nn.Module):
         self.lastConvA = nn.Conv3d(channels, 1, 1, bias=True)
 
         # create feature fusion
-        self.capsule_layer = CapsuleLayer(2, 240, "conv", k=3, s=1, t_1=1, z_1=240, routing=3)
+        self.capsule_layer = CapsuleLayer(2, 240, "conv", k=3, s=1, t_1=2, z_1=240, routing=3)
         self.conv_fusion = nn.Conv3d(480, 240, 1, bias=True)
         self.gn_fusion = nn.GroupNorm(2, 240)
         # self.routing_layer = nn.Conv3d(2 * channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 1), 1, bias=True)
@@ -1263,26 +1263,28 @@ class NoNewNet(nn.Module):
     def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
                  **kwargs):
         super(NoNewNet, self).__init__()
-        channels = 30
-        self.levels = 5
+        channels = 90
+        self.levels = 4
 
         self.lastConv = nn.Conv3d(channels, out_channels, 1, bias=True)
         self.se = SELayer(in_channels)
 
         # create encoder levels
         encoderModules = []
-        encoderModules.append(EncoderModule(in_channels, channels, False, True))
+        encoderModules.append(EncoderModule(in_channels, channels, True, True, alpha_in=0))
         for i in range(self.levels - 2):
             encoderModules.append(EncoderModule(channels * pow(2, i), channels * pow(2, i+1), True, True))
-        encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), True, False))
+        encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), True, True))
         self.encoders = nn.ModuleList(encoderModules)
 
         # create decoder levels
         decoderModules = []
-        decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, False))
+        decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), True, True))
         for i in range(self.levels - 2):
-            decoderModules.append(DecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True, True))
-        decoderModules.append(DecoderModule(channels, channels, False, True))
+            decoderModules.append(
+                    DecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), True,
+                                  True))
+        decoderModules.append(DecoderModule(channels, 2*channels, True, True))
         self.decoders = nn.ModuleList(decoderModules)
 
     def forward(self, x):

@@ -165,17 +165,17 @@ class BratsDataset(torch.utils.data.Dataset):
         if not self.nnAugmentation:
             if not self.trainOriginalClasses and (self.mode != "train" or self.softAugmentation):
                 if self.hasMasks:
-                    et_labels = self._toEvaluationTwoClassification(labels, subrigon='ET')
-                    tc_labels = self._toEvaluationTwoClassification(labels, subrigon='TC')
+                    # et_labels = self._toEvaluationTwoClassification(labels, subrigon='ET')
+                    # tc_labels = self._toEvaluationTwoClassification(labels, subrigon='TC')
                     wt_labels = self._toEvaluationTwoClassification(labels, subrigon='WT')
-                    bg_labels = self._toEvaluationTwoClassification(labels, subrigon='BG')
+                    # bg_labels = self._toEvaluationTwoClassification(labels, subrigon='BG')
                 defaultLabelValues = np.zeros(3, dtype=np.float32)
             else:
                 if self.hasMasks:
-                    et_labels = self._toEvaluationTwoClassification(labels, subrigon='ET')
-                    tc_labels = self._toEvaluationTwoClassification(labels, subrigon='TC')
+                    # et_labels = self._toEvaluationTwoClassification(labels, subrigon='ET')
+                    # tc_labels = self._toEvaluationTwoClassification(labels, subrigon='TC')
                     wt_labels = self._toEvaluationTwoClassification(labels, subrigon='WT')
-                    bg_labels = self._toEvaluationTwoClassification(labels, subrigon='BG')
+                    # bg_labels = self._toEvaluationTwoClassification(labels, subrigon='BG')
                 defaultLabelValues = np.asarray([1, 0, 0, 0, 0], dtype=np.float32)
         elif self.hasMasks:
             if labels.ndim < 4:
@@ -184,17 +184,17 @@ class BratsDataset(torch.utils.data.Dataset):
 
         if self.nnAugmentation:
             if self.hasMasks:
-                et_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='ET')
-                tc_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='TC')
+                # et_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='ET')
+                # tc_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='TC')
                 wt_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='WT')
-                bg_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='BG')
+                # bg_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='BG')
         else:
             if self.mode == "train" and not self.softAugmentation and not self.trainOriginalClasses and self.hasMasks:
                 labels = self._toOrdinal(labels)
-                et_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='ET')
-                tc_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='TC')
+                # et_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='ET')
+                # tc_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='TC')
                 wt_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='WT')
-                bg_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='BG')
+                # bg_labels = self._toEvaluationTwoClassification(np.squeeze(labels, 3), subrigon='BG')
 
         if self.doMixUp:
             datasize = self.file["images_" + self.mode].shape[0]
@@ -268,24 +268,23 @@ class BratsDataset(torch.utils.data.Dataset):
         # image = np.concatenate((image, result[:, :, :, 0:1]), 3)
         # image = np.concatenate((image, result[:, :, :, 3:4]), 3)
 
-        label_list = [et_labels, tc_labels, wt_labels, bg_labels]
+        labels = wt_labels
         # augment data
-        for i, labels in enumerate(label_list):
-            if self.mode == "train" and self.aug is True:
-                image, labels = aug.augment3DImage(image,
-                                                   labels,
-                                                   defaultLabelValues,
-                                                   self.nnAugmentation,
-                                                   self.doRotate,
-                                                   self.rotDegrees,
-                                                   self.doScale,
-                                                   self.scaleFactor,
-                                                   self.doFlip,
-                                                   self.doElasticAug,
-                                                   self.sigma,
-                                                   self.doIntensityShift,
-                                                   self.maxIntensityShift)
-                label_list[i] = labels
+        # if self.mode == "train" and self.aug is True:
+            # image, labels = aug.augment3DImage(image,
+            #                                    labels,
+            #                                    defaultLabelValues,
+            #                                    self.nnAugmentation,
+            #                                    self.doRotate,
+            #                                    self.rotDegrees,
+            #                                    self.doScale,
+            #                                    self.scaleFactor,
+            #                                    self.doFlip,
+            #                                    self.doElasticAug,
+            #                                    self.sigma,
+            #                                    self.doIntensityShift,
+            #                                    self.maxIntensityShift)
+
 
         # random crop
         if not self.randomCrop is None:
@@ -295,22 +294,36 @@ class BratsDataset(torch.utils.data.Dataset):
             z = random.randint(0, shape[2] - self.randomCrop[2])
             image = image[x:x+self.randomCrop[0], y:y+self.randomCrop[1], z:z+self.randomCrop[2], :]
             if self.hasMasks:
-                for i, labels in enumerate(label_list):
-                    labels = labels[x:x + self.randomCrop[0], y:y + self.randomCrop[1], z:z + self.randomCrop[2], :]
-                    label_list[i] = labels
-        image = np.transpose(image, (3, 0, 1, 2))  # bring into NCWH format
+                labels = labels[x:x + self.randomCrop[0], y:y + self.randomCrop[1], z:z + self.randomCrop[2], :]
+
+        image_ori = image
+
+        if self.mode == "train" and self.aug is True:
+            augmix1, mixlabel1 = self.AugMix(image, labels)
+            augmix2, mixlabel2 = self.AugMix(image, labels)
+            augmix1 = np.transpose(augmix1, (3, 0, 1, 2))
+            augmix2 = np.transpose(augmix2, (3, 0, 1, 2))
+
+        image_ori = np.transpose(image_ori, (3, 0, 1, 2))  # bring into NCWH format
+
         if self.hasMasks:
-            for i, labels in enumerate(label_list):
-                labels = np.transpose(labels, (3, 0, 1, 2))  # bring into NCWH format
-                label_list[i] = labels
+            labels = np.transpose(labels, (3, 0, 1, 2))  # bring into NCWH format
+            if self.mode == "train" and self.aug is True:
+                mixlabel1 = np.transpose(mixlabel1, (3, 0, 1, 2))
+                mixlabel2 = np.transpose(mixlabel2, (3, 0, 1, 2))
+
         # to tensor
         #image = image[:, 0:32, 0:32, 0:32]
         # image = self.make_crop(image)
-        image = torch.from_numpy(image)
+        image_ori = torch.from_numpy(image_ori)
+        if self.mode == "train" and self.aug is True:
+            augmix1 = torch.from_numpy(augmix1)
+            augmix2 = torch.from_numpy(augmix2)
         if self.hasMasks:
-            for i, labels in enumerate(label_list):
-                labels = torch.from_numpy(labels)
-                label_list[i] = labels
+            labels = torch.from_numpy(labels)
+            if self.mode == "train" and self.aug is True:
+                mixlabel1 = torch.from_numpy(mixlabel1)
+                mixlabel2 = torch.from_numpy(mixlabel2)
 
         # get pid
         pid = self.file["pids_" + self.mode][index]
@@ -320,20 +333,64 @@ class BratsDataset(torch.utils.data.Dataset):
             yOffset = self.file["yOffsets_" + self.mode][index]
             zOffset = self.file["zOffsets_" + self.mode][index]
             if self.hasMasks:
-                return image, str(pid), image2, xOffset, yOffset, zOffset
+                return image_ori, str(pid), image2, xOffset, yOffset, zOffset
             else:
-                return image, pid, xOffset, yOffset, zOffset
+                return image_ori, pid, xOffset, yOffset, zOffset
         else:
             if self.hasMasks:
-                return image, str(pid), image2, label_list[0], label_list[1], label_list[2], label_list[3]
+                if self.mode == "train" and self.aug is True:
+                    return image_ori, str(pid), labels, augmix1, mixlabel1, augmix2, mixlabel2
+                else:
+                    return image_ori, str(pid), labels
             else:
-                return image, pid
+                return image_ori, pid
 
     def __len__(self):
         # lazily open file
         self.openFileIfNotOpen()
 
         return self.file["images_" + self.mode].shape[0]
+
+    def AugMix(self, image, labels):
+        """Perform AugMix augmentations and compute mixture.
+
+        Args:
+          image: PIL.Image input image
+          preprocess: Preprocessing function which should return a torch tensor.
+
+        Returns:
+          mixed: Augmented and mixed image.
+        """
+        defaultLabelValues = np.asarray([0], dtype=np.float32)
+        ws = np.float32(np.random.dirichlet([1] * 3))
+        m = np.float32(np.random.beta(1, 1))
+
+        mix = np.zeros_like(image)
+        labels_aug = np.zeros_like(labels)
+        for i in range(3):
+            image_aug = image.copy()
+            labels_aug = labels.copy()
+            depth = 1
+            for _ in range(depth):
+                op = np.random.choice([True, False], 5)
+                image_aug, labels_aug = aug.augment3DImage(image_aug,
+                                                           labels_aug,
+                                                           defaultLabelValues,
+                                                           nnAug=self.nnAugmentation,
+                                                           do_rotate=op[0],
+                                                           rotDegrees=self.rotDegrees,
+                                                           do_scale=op[1],
+                                                           scaleFactor=self.scaleFactor,
+                                                           do_flip=op[2],
+                                                           do_elasticAug=op[3],
+                                                           do_intensityShift=op[4])
+            # Preprocessing commutes since all coefficients are convex
+            mix += ws[i] * image_aug
+            labels_aug += ws[i] * labels_aug
+
+        mixed = (1 - m) * image + m * mix
+        mixed_label = (1 - m) * labels + m * labels_aug
+        return mixed, mixed_label
 
     def openFileIfNotOpen(self):
         if self.file == None:
@@ -557,8 +614,8 @@ def get_brats_train_loaders(config):
     # train_datasets = BraTSDataset(brats, train_ids, phase='train',
     #                               transformer_config=loaders_config['transformer'],
     #                               is_mixup=loaders_config['mixup'])
-    train_datasets = BratsDataset(train_path[0], randomCrop=[88, 88, 88], doMixUp=loaders_config['mixup'],
-                                  data_aug=loaders_config['data_aug'], template=loaders_config['template_path'][0])
+    train_datasets = BratsDataset(train_path[0], doMixUp=loaders_config['mixup'],
+                                  data_aug=loaders_config['data_aug'], randomCrop=[128, 128, 128], template=loaders_config['template_path'][0])
 
     logger.info(f'Loading validation set from: {val_path}...')
     # brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train

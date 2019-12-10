@@ -592,6 +592,81 @@ class LinearCapsPro(nn.Module):
         return torch.sqrt(out)
 
 
+class OctaveConv(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, alpha_in=0.5, alpha_out=0.5, stride=1, padding=0, dilation=1,
+                 groups=1, bias=False):
+        super(OctaveConv, self).__init__()
+        self.downsample = nn.AvgPool3d(kernel_size=(2, 2, 2), stride=2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        assert stride == 1 or stride == 2, "Stride should be 1 or 2."
+        self.stride = stride
+        assert 0 <= alpha_in <= 1 and 0 <= alpha_out <= 1, "Alphas should be in the interval from 0 to 1."
+        self.alpha_in, self.alpha_out = alpha_in, alpha_out
+        self.conv_l2l = None if alpha_in == 0 or alpha_out == 0 else \
+                        nn.Conv3d(int(alpha_in * in_channels), int(alpha_out * out_channels),
+                                  kernel_size, 1, padding, dilation, groups, bias)
+        self.conv_l2h = None if alpha_in == 0 or alpha_out == 1 else \
+                        nn.Conv3d(int(alpha_in * in_channels), out_channels - int(alpha_out * out_channels),
+                                  kernel_size, 1, padding, dilation, groups, bias)
+        self.conv_h2l = None if alpha_in == 1 or alpha_out == 0 else \
+                        nn.Conv3d(in_channels - int(alpha_in * in_channels), int(alpha_out * out_channels),
+                                  kernel_size, 1, padding, dilation, groups, bias)
+        self.conv_h2h = None if alpha_in == 1 or alpha_out == 1 else \
+                        nn.Conv3d(in_channels - int(alpha_in * in_channels), out_channels - int(alpha_out * out_channels),
+                                  kernel_size, 1, padding, dilation, groups, bias)
+
+    def forward(self, x):
+        x_h, x_l = x if type(x) is tuple else (x, None)
+
+        if x_h is not None:
+            x_h = self.downsample(x_h) if self.stride == 2 else x_h
+            x_h2h = self.conv_h2h(x_h)
+            x_h2l = self.conv_h2l(self.downsample(x_h)) if self.alpha_out > 0 else None
+        if x_l is not None:
+            x_l2h = self.conv_l2h(x_l)
+            x_l2h = self.upsample(x_l2h) if self.stride == 1 else x_l2h
+            x_l2l = self.downsample(x_l) if self.stride == 2 else x_l
+            x_l2l = self.conv_l2l(x_l2l) if self.alpha_out > 0 else None
+            x_h = x_l2h + x_h2h
+            x_l = x_h2l + x_l2l if x_h2l is not None and x_l2l is not None else None
+            return x_h, x_l
+        else:
+            return x_h2h, x_h2l
+
+
+class Conv_BN(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, alpha_in=0.5, alpha_out=0.5, stride=1, padding=0, dilation=1,
+                 groups=1, bias=False, norm_layer=nn.GroupNorm):
+        super(Conv_BN, self).__init__()
+        self.conv = OctaveConv(in_channels, out_channels, kernel_size, alpha_in, alpha_out, stride, padding, dilation,
+                               groups, bias)
+        self.bn_h = None if alpha_out == 1 else norm_layer(min(int(out_channels * (1 - alpha_out)), 90), int(out_channels * (1 - alpha_out)))
+        self.bn_l = None if alpha_out == 0 else norm_layer(min(int(out_channels * alpha_out), 90), int(out_channels * alpha_out))
+
+    def forward(self, x):
+        x_h, x_l = self.conv(x)
+        x_h = self.bn_h(x_h)
+        x_l = self.bn_l(x_l) if x_l is not None else None
+        return x_h, x_l
+
+
+class Conv_BN_ACT(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, alpha_in=0.5, alpha_out=0.5, stride=1, padding=0, dilation=1,
+                 groups=1, bias=False, norm_layer=nn.GroupNorm, activation_layer=nn.ReLU):
+        super(Conv_BN_ACT, self).__init__()
+        self.conv = OctaveConv(in_channels, out_channels, kernel_size, alpha_in, alpha_out, stride, padding, dilation,
+                               groups, bias)
+        self.bn_h = None if alpha_out == 1 else norm_layer(min(int(out_channels * (1 - alpha_out)), 90), int(out_channels * (1 - alpha_out)))
+        self.bn_l = None if alpha_out == 0 else norm_layer(min(int(out_channels * alpha_out), 90), int(out_channels * alpha_out))
+        self.act = activation_layer(inplace=True)
+
+    def forward(self, x):
+        x_h, x_l = self.conv(x)
+        x_h = self.act(self.bn_h(x_h))
+        x_l = self.act(self.bn_l(x_l)) if x_l is not None else None
+        return x_h, x_l
+
+
 class CapsuleLayer(nn.Module):
     def __init__(self, t_0, z_0, op, k, s, t_1, z_1, routing):
         super().__init__()
@@ -716,17 +791,21 @@ class CapsuleLayer(nn.Module):
 
 
 class EncoderModule(nn.Module):
-    def __init__(self, inChannels, outChannels, maxpool=False, secondConv=True, hasDropout=False):
+    def __init__(self, inChannels, outChannels, maxpool=False, secondConv=True, hasDropout=False, output=False, alpha_in=0.5):
         super(EncoderModule, self).__init__()
         groups = min(outChannels, 30)
+        width = 2
         self.maxpool = maxpool
         self.secondConv = secondConv
         self.hasDropout = hasDropout
-        self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
+        self.conv1 = Conv_BN_ACT(inChannels, width, 1, alpha_in=alpha_in)
+        # self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
         self.gn1 = nn.GroupNorm(groups, outChannels)
         # self.se = SELayer(outChannels)
         if secondConv:
-            self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
+            # self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
+            self.conv2 = Conv_BN_ACT(width, width, 3, padding=1)
+            self.conv3 = Conv_BN(width, outChannels, kernel_size=1, alpha_in=0 if output else 0.5, alpha_out=0 if output else 0.5)
             self.gn2 = nn.GroupNorm(groups, outChannels)
         if hasDropout:
             self.dropout = nn.Dropout3d(0.2, True)
@@ -735,13 +814,18 @@ class EncoderModule(nn.Module):
         if self.maxpool:
             x = F.max_pool3d(x, 2)
         doInplace = True and not self.hasDropout
-        x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=doInplace)
+        x_h, x_l = self.conv1(x)
+        x_h, x_l = self.conv2((x_h, x_l))
+        x_h, x_l = self.conv3((x_h, x_l))
+        x_h = F.relu(x_h, inplace=doInplace)
+        # x_l = F.relu(x_l)
+        # x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=doInplace)
         if self.hasDropout:
-            x = self.dropout(x)
-        if self.secondConv:
-            x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=doInplace)
+            x_h = self.dropout(x_h)
+        # if self.secondConv:
+        #     x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=doInplace)
         # x = self.se(x)
-        return x
+        return x_h
 
 
 # class DecoderModule(nn.Module):
@@ -769,24 +853,30 @@ class EncoderModule(nn.Module):
 
 
 class DecoderModule(nn.Module):
-    def __init__(self, inChannels, outChannels, upsample=False, firstConv=True):
+    def __init__(self, inChannels, outChannels, upsample=False, firstConv=True, alpha_in=0.5, output=False):
         super(DecoderModule, self).__init__()
         groups = min(outChannels, 30)
         self.upsample = upsample
         self.firstConv = firstConv
         if firstConv:
             self.conv1 = nn.Conv3d(inChannels, inChannels, 3, padding=1, bias=False)
+            self.conv1 = Conv_BN_ACT(inChannels, outChannels, 1, alpha_in=alpha_in)
             self.gn1 = nn.GroupNorm(groups, inChannels)
         self.conv2 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
+        self.conv2 = Conv_BN_ACT(outChannels, outChannels, 3, padding=1, alpha_in=alpha_in)
+        self.conv3 = Conv_BN(outChannels, outChannels, kernel_size=1, alpha_in=0 if output else 0.5,
+                             alpha_out=0 if output else 0.5)
         self.gn2 = nn.GroupNorm(groups, outChannels)
 
     def forward(self, x):
-        if self.firstConv:
-            x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=True)
-        x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=True)
+        doInplace = True
+        x_h, x_l = self.conv1(x)
+        x_h, x_l = self.conv2((x_h, x_l))
+        x_h, x_l = self.conv3((x_h, x_l))
+        x_h = F.relu(x_h, inplace=doInplace)
         if self.upsample:
-            x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
-        return x
+            x_h = F.interpolate(x_h, scale_factor=2, mode="trilinear", align_corners=False)
+        return x_h
 
 
 class VaeBlock(nn.Module):

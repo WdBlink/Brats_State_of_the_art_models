@@ -3,7 +3,7 @@ manual_seed: 0
 # model configuration
 model:
   # model class
-  name: SegCaps
+  name: NoNewNet
   # number of input channels to the model
   in_channels: 4
   # number of output channels
@@ -19,7 +19,7 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/dell/github/pytorch-3dunet/checkpoints/capsule_WT/
+  checkpoint_dir: /home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/OCN_GN_NoNewNet_WT_LookAhead_batchsize=2_nocrop/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # fine-tune a given pre-trained model
@@ -39,9 +39,9 @@ trainer:
 # optimizer configuration
 optimizer:
   #mode
-  mode: Adam
+  mode: look_ahead
   # initial learning rate
-  learning_rate: 0.0001
+  learning_rate: 0.001
   # weight decay
   weight_decay: 0.00003
 # loss function configuration
@@ -70,9 +70,9 @@ lr_scheduler:
 # data loaders co;nfiguration
 loaders:
   # batch size
-  batch_size: 1
+  batch_size: 2
   # if use Mix Up
-  mixup: False
+  mixup: True
   # if use data augment
   data_aug: True
   # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
@@ -89,18 +89,18 @@ loaders:
   label_internal_path: label
   # paths to the training datasets
   train_path:
-    - '/home/dell/data/Brats19/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
+    - '/home/dell/data/Dataset/Brats19/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
   # paths to the validation datasets
   val_path:
-    - '/home/dell/data/Brats19/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
+    - '/home/dell/data/Dataset/Brats19/data_3D_size_160_192_160_res_1.0_1.0_1.0.hdf5'
   test_path:
-    - '/home/dell/data/Brats19/data_3D.hdf5'
+    - '/home/dell/data/Dataset/Brats19/data_3D.hdf5'
   dataset_path:
-    - '/home/dell/data'
+    - '/home/dell/data/Dataset/'
   pred_path:
-    - '/home/dell/data/Brats19/'
+    - '/home/dell/data/Dataset/Brats19'
   template_path:
-    - '/home/dell/data/Brats19/MixupData.nii.gz'
+    - '/home/dell/data/Dataset/Brats19/MixupData.nii.gz'
   # how many subprocesses to use for data loading
   num_workers: 0
   # data transformations/augmentations

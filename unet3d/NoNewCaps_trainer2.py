@@ -190,14 +190,14 @@ class UNet3DTrainer:
                 f'Batch {i}. '
                 f'Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
 
-            a, pid, b, label_list = self._split_training_batch(t)
+            a, pid, b, target = self._split_training_batch(t)
             # image, pid, image2, et_labels, tc_labels, wt_labels, bg_labels
 
             # code_t1, recon_t1, _ = self.model_encoder_t1(a, b)
             # code_t1ce, recon_t1ce, _ = self.model_encoder_t1ce(a, b)
             # code_t2, recon_t2, _ = self.model_encoder_t2(a, b)
             code_flair, recon_flair, _ = self.model_encoder_flair(a, b)
-            loss, output, reconstructA = self._forward_pass(a, code_flair, label_list, weight=None)
+            loss, output, reconstructA = self._forward_pass(a, code_flair, target, weight=None)
 
             # output_sample = output[0, 1, :, :, 80].cpu().detach().numpy()
             # self.draw_picture(output_sample)
@@ -241,7 +241,7 @@ class UNet3DTrainer:
 
                 # visualize the feature map to tensorboard
                 board_list = [a[0:1, 0:1, :, :, a.size(4)//2], reconstructA[0:1, :, :, :, reconstructA.size(4)//2],
-                              output[0:1, :, :, :, output.size(4)//2], label_list[0][0:1, :, :, :, label_list[0].size(4)//2]]
+                              output[0:1, :, :, :, output.size(4)//2], target[0:1, :, :, :, target.size(4)//2]]
                 board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
                 if self.model_name == 'NNNet_Cae':
                     for i, t in enumerate(feature_maps):
@@ -261,7 +261,7 @@ class UNet3DTrainer:
                 plt.savefig(self.checkpoint_dir + 'visualizeRA.jpg')
 
                 # compute eval criterion
-                eval_score = self.eval_criterion(output, label_list[2])
+                eval_score = self.eval_criterion(output, target)
 
                 train_eval_scores_duality.update(eval_score, self._batch_size(a))
 
@@ -328,7 +328,7 @@ class UNet3DTrainer:
                     loss, output, reconstructA = self._forward_pass(a, code_flair, target, mode='val', weight=None)
                     val_losses.update(loss.item(), self._batch_size(a))
 
-                    eval_score = self.eval_criterion(output, target[2])
+                    eval_score = self.eval_criterion(output, target)
 
                     # print the bad guy
                     # if eval_score[0] < 0.5:
@@ -347,7 +347,7 @@ class UNet3DTrainer:
 
                     # visualize the feature map to tensorboard
                     board_list = [a[0:1, 0:1, :, :, a.size(4)//2], reconstructA[0:1, :, :, :, reconstructA.size(4)//2],
-                                  output[0:1, :, :, :, output.size(4)//2], target[0][0:1, :, :, :, target[0].size(4)//2]]
+                                  output[0:1, :, :, :, output.size(4)//2], target[0:1, :, :, :, target.size(4)//2]]
                     board_add_images(self.writer, 'validate_output', board_list, self.num_iterations)
 
                     # save the visualize image
@@ -362,7 +362,7 @@ class UNet3DTrainer:
                     plt.imshow(recon_image.cpu().detach().numpy()[0, 0, :, :, reconstructA.size(4)//2], cmap='gray')
                     plt.savefig(self.checkpoint_dir + '/' + str(pid) + '_visualizeRA' + str(pid) + '.jpg')
 
-                    plt.imshow(target[2].cpu().detach().numpy()[0, 0, :, :, target[2].size(4) // 2], cmap='gray')
+                    plt.imshow(target.cpu().detach().numpy()[0, 0, :, :, target.size(4) // 2], cmap='gray')
                     plt.savefig(self.checkpoint_dir + '/' + str(pid) + '_target' + str(pid) + '.jpg')
 
                     if self.validate_iters is not None and self.validate_iters <= i:
@@ -441,9 +441,7 @@ class UNet3DTrainer:
     def _split_training_batch(self, t):
         def _move_to_device(input):
             if isinstance(input, tuple) or isinstance(input, list):
-
-                return tuple([_move_to_device(input[0]), input[1], _move_to_device(input[2]), _move_to_device(input[3]),
-                              _move_to_device(input[4]), _move_to_device(input[5]), _move_to_device(input[6])])
+                return tuple([_move_to_device(input[0]), input[1], _move_to_device(input[2]), _move_to_device(input[3])])
             else:
                 return input.to(self.device, dtype=torch.float)
 
@@ -452,15 +450,14 @@ class UNet3DTrainer:
             image, labels = t
             return image, labels
         else:
-            image, pid, image2, et_labels, tc_labels, wt_labels, bg_labels = t
-            label_list = [et_labels, tc_labels, wt_labels, bg_labels]
-            return image, pid, image2, label_list
+            image, pid, image2, et_labels = t
+            return image, pid, image2, et_labels
 
     def _forward_pass(self, a, code_flair, target, mode='train', weight=None):
         # forward pass
         seg_pred, reconstructA = self.model(a, code_flair)
         # compute the loss
-        loss = self.loss_criterion(seg_pred, target[2])
+        loss = self.loss_criterion(seg_pred, target)
 
         return loss, seg_pred, reconstructA
 
