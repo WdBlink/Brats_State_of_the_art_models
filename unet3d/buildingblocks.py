@@ -3,7 +3,9 @@ from torch import nn as nn
 from torch.nn import functional as F
 from unet3d.config import load_config
 from torch.nn import init
-
+import numpy as np
+from torch.nn.parameter import Parameter
+import math
 
 # initalize the module
 def init_weights(net, init_type='normal'):
@@ -536,13 +538,13 @@ class unetUp(nn.Module):
 #         return x
 
 class SELayer(nn.Module):
-    def __init__(self, channel, reduction=4):
+    def __init__(self, channel, reduction=2):
         super(SELayer, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool3d(1)
         self.fc = nn.Sequential(
-            nn.Linear(channel, channel // reduction, bias=False),
+            nn.Linear(channel, channel // reduction, bias=True),
             nn.ReLU(inplace=True),
-            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Linear(channel // reduction, channel, bias=True),
             nn.Sigmoid()
         )
 
@@ -550,7 +552,252 @@ class SELayer(nn.Module):
         b, c, _, _, _ = x.size()
         y = self.avg_pool(x).view(b, c)
         y = self.fc(y).view(b, c, 1, 1, 1)
-        return x * y.expand_as(x)
+        y_out = y[0, :, 0, 0, 0]
+        return x * y.expand_as(x), y_out
+
+
+class LinearCapsPro(nn.Module):
+    def __init__(self, in_features, num_C, num_D, eps=0.0001):
+        super(LinearCapsPro, self).__init__()
+        self.in_features = in_features
+        self.num_C = num_C
+        self.num_D = num_D
+        self.eps = eps
+        self.weight = Parameter(torch.Tensor(num_C * num_D, in_features))
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        stdv = 1. / math.sqrt(self.weight.size(1))
+        self.weight.data.uniform_(-stdv, stdv)
+
+    def forward(self, x, eye):
+        weight_caps = self.weight[:self.num_D]
+        sigma = torch.inverse(torch.mm(weight_caps, torch.t(weight_caps)) + self.eps * eye)
+        sigma = torch.unsqueeze(sigma, dim=0)
+        for ii in range(1, self.num_C):
+            weight_caps = self.weight[ii * self.num_D:(ii + 1) * self.num_D]
+            sigma_ = torch.inverse(torch.mm(weight_caps, torch.t(weight_caps)) + self.eps * eye)
+            sigma_ = torch.unsqueeze(sigma_, dim=0)
+            sigma = torch.cat((sigma, sigma_))
+
+        out = torch.matmul(x, torch.t(self.weight))
+        out = out.view(out.shape[0], self.num_C, 1, self.num_D)
+        out = torch.matmul(out, sigma)
+        out = torch.matmul(out, self.weight.view(self.num_C, self.num_D, self.in_features))
+        out = torch.squeeze(out, dim=2)
+        out = torch.matmul(out, torch.unsqueeze(x, dim=2))
+        out = torch.squeeze(out, dim=2)
+
+        return torch.sqrt(out)
+
+
+class OctaveConv(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, alpha_in=0.5, alpha_out=0.5, stride=1, padding=0, dilation=1,
+                 groups=1, bias=False):
+        super(OctaveConv, self).__init__()
+        self.downsample = nn.AvgPool3d(kernel_size=(2, 2, 2), stride=2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        assert stride == 1 or stride == 2, "Stride should be 1 or 2."
+        self.stride = stride
+        assert 0 <= alpha_in <= 1 and 0 <= alpha_out <= 1, "Alphas should be in the interval from 0 to 1."
+        self.alpha_in, self.alpha_out = alpha_in, alpha_out
+        self.conv_l2l = None if alpha_in == 0 or alpha_out == 0 else \
+                        nn.Conv3d(int(alpha_in * in_channels), int(alpha_out * out_channels),
+                                  kernel_size, 1, padding, dilation, groups, bias)
+        self.conv_l2h = None if alpha_in == 0 or alpha_out == 1 else \
+                        nn.Conv3d(int(alpha_in * in_channels), out_channels - int(alpha_out * out_channels),
+                                  kernel_size, 1, padding, dilation, groups, bias)
+        self.conv_h2l = None if alpha_in == 1 or alpha_out == 0 else \
+                        nn.Conv3d(in_channels - int(alpha_in * in_channels), int(alpha_out * out_channels),
+                                  kernel_size, 1, padding, dilation, groups, bias)
+        self.conv_h2h = None if alpha_in == 1 or alpha_out == 1 else \
+                        nn.Conv3d(in_channels - int(alpha_in * in_channels), out_channels - int(alpha_out * out_channels),
+                                  kernel_size, 1, padding, dilation, groups, bias)
+
+    def forward(self, x):
+        x_h, x_l = x if type(x) is tuple else (x, None)
+
+        if x_h is not None:
+            x_h = self.downsample(x_h) if self.stride == 2 else x_h
+            x_h2h = self.conv_h2h(x_h)
+            x_h2l = self.conv_h2l(self.downsample(x_h)) if self.alpha_out > 0 else None
+        if x_l is not None:
+            x_l2h = self.conv_l2h(x_l)
+            x_l2h = self.upsample(x_l2h) if self.stride == 1 else x_l2h
+            x_l2l = self.downsample(x_l) if self.stride == 2 else x_l
+            x_l2l = self.conv_l2l(x_l2l) if self.alpha_out > 0 else None
+            x_h = x_l2h + x_h2h
+            x_l = x_h2l + x_l2l if x_h2l is not None and x_l2l is not None else None
+            return x_h, x_l
+        else:
+            return x_h2h, x_h2l
+
+
+class Conv_BN(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, alpha_in=0.5, alpha_out=0.5, stride=1, padding=0, dilation=1,
+                 groups=1, bias=False, norm_layer=nn.BatchNorm3d):
+        super(Conv_BN, self).__init__()
+        self.conv = OctaveConv(in_channels, out_channels, kernel_size, alpha_in, alpha_out, stride, padding, dilation,
+                               groups, bias)
+        if norm_layer==nn.GroupNorm:
+            self.bn_h = None if alpha_out == 1 else norm_layer(min(int(out_channels * (1 - alpha_out)), 90), int(out_channels * (1 - alpha_out)))
+            self.bn_l = None if alpha_out == 0 else norm_layer(min(int(out_channels * alpha_out), 90), int(out_channels * alpha_out))
+        else:
+            self.bn_h = None if alpha_out == 1 else norm_layer(int(out_channels * (1 - alpha_out)))
+            self.bn_l = None if alpha_out == 0 else norm_layer(int(out_channels * alpha_out))
+
+    def forward(self, x):
+        x_h, x_l = self.conv(x)
+        x_h = self.bn_h(x_h)
+        x_l = self.bn_l(x_l) if x_l is not None else None
+        return x_h, x_l
+
+
+class Conv_BN_ACT(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, alpha_in=0.5, alpha_out=0.5, stride=1, padding=0, dilation=1,
+                 groups=1, bias=False, norm_layer=nn.BatchNorm3d, activation_layer=nn.ReLU):
+        super(Conv_BN_ACT, self).__init__()
+        self.conv = OctaveConv(in_channels, out_channels, kernel_size, alpha_in, alpha_out, stride, padding, dilation,
+                               groups, bias)
+        if norm_layer==nn.GroupNorm:
+            self.bn_h = None if alpha_out == 1 else norm_layer(min(int(out_channels * (1 - alpha_out)), 90), int(out_channels * (1 - alpha_out)))
+            self.bn_l = None if alpha_out == 0 else norm_layer(min(int(out_channels * alpha_out), 90), int(out_channels * alpha_out))
+        else:
+            self.bn_h = None if alpha_out == 1 else norm_layer(int(out_channels * (1 - alpha_out)))
+            self.bn_l = None if alpha_out == 0 else norm_layer(int(out_channels * alpha_out))
+        self.act = activation_layer(inplace=True)
+
+    def forward(self, x):
+        x_h, x_l = self.conv(x)
+        x_h = self.act(self.bn_h(x_h))
+        x_l = self.act(self.bn_l(x_l)) if x_l is not None else None
+        return x_h, x_l
+
+
+class CapsuleLayer(nn.Module):
+    def __init__(self, t_0, z_0, op, k, s, t_1, z_1, routing):
+        super().__init__()
+        self.t_1 = t_1
+        self.z_1 = z_1
+        self.op = op
+        self.k = k
+        self.s = s
+        self.routing = routing
+        self.convs = nn.ModuleList()
+        self.t_0 = t_0
+        self.softmax = torch.nn.Softmax(dim=-1)
+        for _ in range(t_0):
+            if self.op == 'conv':
+                # self.convs.append(nn.Conv3d(z_0, self.t_1*self.z_1, self.k, self.s, padding=1, bias=True))
+                self.convs.append(Conv_BN_ACT(z_0, 2*self.t_1*self.z_1, self.k, stride=self.s, padding=1, alpha_in=0))
+            else:
+                # self.convs.append(nn.ConvTranspose3d(z_0, self.t_1 * self.z_1, self.k, self.s, padding=1, output_padding=1))
+                self.convs.append(Conv_BN_ACT(z_0, 2*self.t_1 * self.z_1, self.k, stride=self.s, padding=1, alpha_in=0))
+
+    def forward(self, u):  # input [N,CAPS,C,H,W,D] [batchsize=1, caps=1, 16, 128, 128, 128 ]
+        if u.shape[1] != self.t_0:
+            raise ValueError("Wrong type of operation for capsule")
+        op = self.op
+        k = self.k
+        s = self.s
+        t_1 = self.t_1
+        z_1 = self.z_1
+        routing = self.routing
+        N = u.shape[0]
+        H_1 = u.shape[3]
+        W_1 = u.shape[4]
+        D_1 = u.shape[5]
+        t_0 = self.t_0
+
+        u_t_list = [u_t.squeeze(1) for u_t in u.split(1, 1)]  # 将cap分别取出来
+
+        u_hat_t_list = []
+
+        for i, u_t in zip(range(self.t_0), u_t_list):  # u_t: [N,C,H,W,D]  [1,16,128,128,128]
+            if op == "conv":
+                u_t, _ = self.convs[i](u_t)
+                u_hat_t = F.relu(u_t, inplace=True)  # 卷积方式
+            elif op == "deconv":
+                u_t, _ = self.convs[i](u_t)
+                u_hat_t = F.relu(u_t, inplace=True)  # u_hat_t: [N,t_1*z_1,H,W]
+                u_hat_t = F.interpolate(u_hat_t, scale_factor=2, mode="trilinear", align_corners=False)
+            else:
+                raise ValueError("Wrong type of operation for capsule")
+            H_1 = u_hat_t.shape[2]
+            W_1 = u_hat_t.shape[3]
+            D_1 = u_hat_t.shape[4]
+            u_hat_t = u_hat_t.permute(0, 2, 3, 4, 1).reshape(N, H_1, W_1, D_1, t_1, z_1)
+            # u_hat_t = u_hat_t.reshape(N, t_1, z_1, H_1, W_1, D_1).transpose_(1, 3).transpose_(2, 4)
+            u_hat_t_list.append(u_hat_t)    # [N,H_1,W_1,D_1, t_1,z_1]
+        v = self.update_routing(u_hat_t_list, k, N, H_1, W_1, D_1, t_0, t_1, routing)
+        return v
+
+    def update_routing(self, u_hat_t_list, k, N, H_1, W_1, D_1, t_0, t_1, routing):
+        config = load_config()
+        gpu_num = config['device']
+        one_kernel = torch.ones(1, t_1, k, k, k).cuda(gpu_num)  # 不需要学习
+        b = torch.zeros(N, H_1, W_1, D_1, t_0, t_1).cuda(gpu_num)  # 不需要学习
+        b_t_list = [b_t.squeeze(4) for b_t in b.split(1, 4)]
+        u_hat_t_list_sg = []
+        for u_hat_t in u_hat_t_list:
+            u_hat_t_sg = u_hat_t
+            u_hat_t_list_sg.append(u_hat_t_sg)
+
+        d = 0
+        while d < routing:
+            u_hat_t_list_ = u_hat_t_list_sg
+            r_t_mul_u_hat_t_list = []
+            for b_t, u_hat_t in zip(b_t_list, u_hat_t_list_):
+                route = self.softmax(b_t)
+                route = route.unsqueeze(5)
+                preactivate = route * u_hat_t
+                r_t_mul_u_hat_t_list.append(preactivate)
+            activation = self.squash(sum(r_t_mul_u_hat_t_list))
+
+            for b_t, u_hat_t in zip(b_t_list, u_hat_t_list_):
+                b_t_list_ = []
+                tmp = (activation.sum(5).unsqueeze(5) * u_hat_t).sum(5)
+                b_t_list_.append(b_t + tmp)
+                b_t_list = b_t_list_
+            d = d + 1
+        activation = activation.permute(0, 4, 5, 1, 2, 3)
+        return activation
+
+    def squash(self, p):
+        squared_norm = torch.pow(p, 2).sum(-1, True)
+        safe_norm = (squared_norm + 1e-9).sqrt()
+        squash_factor = squared_norm / (1. + squared_norm)
+        unit_vector = p / safe_norm
+        return squash_factor * unit_vector
+
+    def conv3d_same(self, input, weight, bias=None, stride=[1, 1, 1], dilation=(1, 1, 1), groups=1):
+        input_rows = input.size(2)
+        filter_rows = weight.size(2)
+        out_rows = (input_rows + stride[0] - 1) // stride[0]
+        padding_rows = max(0, (out_rows - 1) * stride[0] +
+                           (filter_rows - 1) * dilation[0] + 1 - input_rows)
+        rows_odd = (padding_rows % 2 != 0)
+        padding_cols = max(0, (out_rows - 1) * stride[0] +
+                           (filter_rows - 1) * dilation[0] + 1 - input_rows)
+        cols_odd = (padding_rows % 2 != 0)
+        if rows_odd or cols_odd:
+            input = F.pad(input, [0, int(cols_odd), 0, int(rows_odd), 0, int(rows_odd)])
+        return F.conv3d(input, weight, bias, stride,
+                        padding=(padding_rows // 2, padding_cols // 2, padding_cols // 2),
+                        dilation=dilation, groups=groups)
+
+    def max_pool3d_same(self, input, kernel_size, stride=1, dilation=1, ceil_mode=False, return_indices=False):
+        input_rows = input.size(2)
+        out_rows = (input_rows + stride - 1) // stride
+        padding_rows = max(0, (out_rows - 1) * stride +
+                           (kernel_size - 1) * dilation + 1 - input_rows)
+        rows_odd = (padding_rows % 2 != 0)
+        cols_odd = (padding_rows % 2 != 0)
+        if rows_odd or cols_odd:
+            input = F.pad(input, [0, int(cols_odd), 0, int(rows_odd)])
+        return F.max_pool3d(input, kernel_size=kernel_size, stride=stride, padding=padding_rows // 2, dilation=dilation,
+                            ceil_mode=ceil_mode, return_indices=return_indices)
 
 
 class EncoderModule(nn.Module):
@@ -562,10 +809,14 @@ class EncoderModule(nn.Module):
         self.hasDropout = hasDropout
         self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
         self.gn1 = nn.GroupNorm(groups, outChannels)
+        self.bn = nn.BatchNorm3d(outChannels)
+        self.in1 = nn.InstanceNorm3d(outChannels)
         # self.se = SELayer(outChannels)
         if secondConv:
             self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
             self.gn2 = nn.GroupNorm(groups, outChannels)
+            self.bn2 = nn.BatchNorm3d(outChannels)
+            self.in2 = nn.InstanceNorm3d(outChannels)
         if hasDropout:
             self.dropout = nn.Dropout3d(0.2, True)
 
@@ -577,33 +828,9 @@ class EncoderModule(nn.Module):
         if self.hasDropout:
             x = self.dropout(x)
         if self.secondConv:
-            x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=doInplace)
+            x = F.leaky_relu(self.gn1(self.conv2(x)), inplace=doInplace)
         # x = self.se(x)
         return x
-
-
-# class DecoderModule(nn.Module):
-#     def __init__(self, inChannels, outChannels, upsample=False, firstConv=True):
-#         super(DecoderModule, self).__init__()
-#         groups = min(outChannels, 30)
-#         self.upsample = upsample
-#         self.firstConv = firstConv
-#         if firstConv:
-#             self.conv1 = nn.Conv3d(inChannels, inChannels, 3, padding=1, bias=False)
-#             self.gn1 = nn.GroupNorm(groups, inChannels)
-#         self.conv2 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
-#         self.gn2 = nn.GroupNorm(groups, outChannels)
-#
-#         # for m in self.children():
-#         #     init_weights(m, init_type='kaiming')
-#
-#     def forward(self, x):
-#         if self.firstConv:
-#             x = F.relu(self.gn1(self.conv1(x)), inplace=True)
-#         x = F.relu(self.gn2(self.conv2(x)), inplace=True)
-#         if self.upsample:
-#             x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
-#         return x
 
 
 class DecoderModule(nn.Module):
@@ -625,6 +852,71 @@ class DecoderModule(nn.Module):
         if self.upsample:
             x = F.interpolate(x, scale_factor=2, mode="trilinear", align_corners=False)
         return x
+
+
+class OctaveEncoderModule(nn.Module):
+    def __init__(self, inChannels, outChannels, maxpool=False, secondConv=True, hasDropout=False, output=False, alpha_in=0.5):
+        super(OctaveEncoderModule, self).__init__()
+        groups = min(outChannels, 30)
+        width = 2
+        self.maxpool = maxpool
+        self.secondConv = secondConv
+        self.hasDropout = hasDropout
+        self.conv1 = Conv_BN_ACT(inChannels, width, 1, alpha_in=alpha_in)
+        # self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
+        self.gn1 = nn.GroupNorm(groups, outChannels)
+        # self.se = SELayer(outChannels)
+        if secondConv:
+            # self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
+            self.conv2 = Conv_BN_ACT(width, width, 3, padding=1)
+            self.conv3 = Conv_BN(width, outChannels, kernel_size=1, alpha_in=0 if output else 0.5, alpha_out=0 if output else 0.5)
+            self.gn2 = nn.GroupNorm(groups, outChannels)
+        if hasDropout:
+            self.dropout = nn.Dropout3d(0.2, True)
+
+    def forward(self, x):
+        if self.maxpool:
+            x = F.max_pool3d(x, 2)
+        doInplace = True and not self.hasDropout
+        x_h, x_l = self.conv1(x)
+        x_h, x_l = self.conv2((x_h, x_l))
+        x_h, x_l = self.conv3((x_h, x_l))
+        x_h = F.relu(x_h, inplace=doInplace)
+        # x_l = F.relu(x_l)
+        # x = F.leaky_relu(self.gn1(self.conv1(x)), inplace=doInplace)
+        if self.hasDropout:
+            x_h = self.dropout(x_h)
+        # if self.secondConv:
+        #     x = F.leaky_relu(self.gn2(self.conv2(x)), inplace=doInplace)
+        # x = self.se(x)
+        return x_h
+
+
+class OctaveDecoderModule(nn.Module):
+    def __init__(self, inChannels, outChannels, upsample=False, firstConv=True, alpha_in=0.5, output=False):
+        super(OctaveDecoderModule, self).__init__()
+        groups = min(outChannels, 30)
+        self.upsample = upsample
+        self.firstConv = firstConv
+        if firstConv:
+            self.conv1 = nn.Conv3d(inChannels, inChannels, 3, padding=1, bias=False)
+            self.conv1 = Conv_BN_ACT(inChannels, outChannels, 1, alpha_in=alpha_in)
+            self.gn1 = nn.GroupNorm(groups, inChannels)
+        self.conv2 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
+        self.conv2 = Conv_BN_ACT(outChannels, outChannels, 3, padding=1, alpha_in=alpha_in)
+        self.conv3 = Conv_BN(outChannels, outChannels, kernel_size=1, alpha_in=0 if output else 0.5,
+                             alpha_out=0 if output else 0.5)
+        self.gn2 = nn.GroupNorm(groups, outChannels)
+
+    def forward(self, x):
+        doInplace = True
+        x_h, x_l = self.conv1(x)
+        x_h, x_l = self.conv2((x_h, x_l))
+        x_h, x_l = self.conv3((x_h, x_l))
+        x_h = F.relu(x_h, inplace=doInplace)
+        if self.upsample:
+            x_h = F.interpolate(x_h, scale_factor=2, mode="trilinear", align_corners=False)
+        return x_h
 
 
 class VaeBlock(nn.Module):

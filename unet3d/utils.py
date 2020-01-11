@@ -76,7 +76,10 @@ def load_checkpoint(checkpoint_path, model, optimizer=None):
         print('Failed to do something: ' + str(e))
 
     if optimizer is not None:
-        optimizer.load_state_dict(state['optimizer_state_dict'])
+        try:
+            optimizer.load_state_dict(state['optimizer_state_dict'])
+        except Exception as e:
+            print(e)
 
     return state
 
@@ -120,6 +123,23 @@ class RunningAverage:
         self.count += n
         self.sum += value * n
         self.avg = self.sum / self.count
+
+
+class RunningAverageDuality:
+
+    def __init__(self):
+        self.count1 = 0
+        self.sum1 = 0
+        self.sum2 = 0
+        self.dice_WT = 0
+        self.sens_WT = 0
+
+    def update(self, value, n=1):
+        self.count1 += n
+        self.sum1 += value[0] * n
+        self.sum2 += value[1] * n
+        self.dice_WT = self.sum1 / self.count1
+        self.sens_WT = self.sum2 / self.count1
 
 
 class RunningAverageMulti:

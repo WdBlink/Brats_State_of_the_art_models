@@ -4,8 +4,6 @@ import os
 import numpy as np
 import torch
 import datetime
-import math
-import torch.nn.functional as F
 from unet3d.config import load_config
 from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -73,15 +71,6 @@ class UNet3DTrainer:
         self.log_after_iters = log_after_iters
         self.validate_iters = validate_iters
         self.eval_score_higher_is_better = eval_score_higher_is_better
-        self.augmix = False
-        self.labelmix = True
-        self.teacher_network = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/teacher_network.pkl').to(config['device'])
-        self.teacher_network2 = torch.load(
-            '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/teacher_network2.pkl').to(config['device'])
-        self.teacher_network3 = torch.load(
-            '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/teachernetwork*2_mixlabel_GN_NNNetbaseline_SE_ET_LookAhead_batchsize=1/epoch128_model.pkl').to(config['device'])
-        self.teacher_network4 = torch.load(
-            '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/teachernetwork*2_mixlabel_GN_NNNetbaseline_SE_ET_LookAhead_batchsize=1/epoch189_model.pkl').to(config['device'])
         logger.info(f'eval_score_higher_is_better: {eval_score_higher_is_better}')
 
         if best_eval_score is not None:
@@ -179,8 +168,6 @@ class UNet3DTrainer:
         train_eval_scores_multi = utils.RunningAverageMulti()
         train_eval_scores_duality = utils.RunningAverageDuality()
 
-        # torch.save(self.model, '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/teacher_network2.pkl')
-
         # make predictions
         # self.makePredictions(self.loaders['challenge'])
 
@@ -194,17 +181,9 @@ class UNet3DTrainer:
                 f'Batch {i}. '
                 f'Epoch [{self.num_epoch}/{self.max_num_epochs - 1}]')
 
-            if self.augmix:
-                input, pid, target, augmix1, mixlabel1, augmix2, mixlabel2 = self._split_training_batch(t)
-                im_tuple = (input, augmix1)
-                images = torch.cat(im_tuple, 0)
-                label_tuple = (target, mixlabel1)
-                target = torch.cat(label_tuple, 0)
-            else:
-                input, pid, target = self._split_training_batch(t)
-                images = input
-            output, loss, feature_maps, channel_weight = self._forward_pass(images, target, weight=None,
-                                                                            augmix=self.augmix, mix_label=self.labelmix)
+            input, pid, target = self._split_training_batch(t)
+
+            output, loss, feature_maps, channel_weight = self._forward_pass(input, target, weight=None)
 
             # output_sample = output[0, 1, :, :, 80].cpu().detach().numpy()
             # self.draw_picture(output_sample)
@@ -249,27 +228,12 @@ class UNet3DTrainer:
                     output = self.model.final_activation(output)
 
                 # visualize the feature map to tensorboard
-                if self.augmix:
-                    board_list = [input[0:1, 1:2, :, :, 64], augmix1[0:1, 1:2, :, :, 64], augmix2[0:1, 1:2, :, :, 64]]
-                    board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
-                    if self.model_name == 'NNNet_Cae':
-                        for i, t in enumerate(feature_maps):
-                            board_add_image(self.writer, f'feature_map{i}', t, self.num_iterations)
-                        # board_add_images(self.writer, 'feature_map', feature_maps, self.num_iterations)
-                elif self.labelmix:
-                    target2 = feature_maps[0]
-                    mix_target = feature_maps[1]
-                    board_list = [input[0:1, 1:4, :, :, input.size(4) // 2], output[0:1, :, :, :, output.size(4) // 2],
-                                  target[0:1, :, :, :, target.size(4) // 2], target2[0:1, :, :, :, target.size(4) // 2],
-                                  mix_target[0:1, :, :, :, mix_target.size(4) // 2]]
-                    board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
-                else:
-                    board_list = [input[0:1, 2:4, :, :, input.size(4) // 2], output[0:1, :, :, :, output.size(4) // 2],
-                                  target[0:1, :, :, :, target.size(4) // 2]]
-                    board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
-                    if self.model_name == 'NNNet_Cae':
-                        for i, t in enumerate(feature_maps):
-                            board_add_image(self.writer, f'feature_map{i}', t, self.num_iterations)
+                board_list = [input[0:1, 1:4, :, :, 64], output[0:1, :, :, :, 64], target[0:1, :, :, :, 64]]
+                board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
+                if self.model_name == 'NNNet_Cae':
+                    for i, t in enumerate(feature_maps):
+                        board_add_image(self.writer, f'feature_map{i}', t, self.num_iterations)
+                    # board_add_images(self.writer, 'feature_map', feature_maps, self.num_iterations)
 
                 # compute eval criterion
                 eval_score = self.eval_criterion(output, target)
@@ -330,7 +294,7 @@ class UNet3DTrainer:
                 for i, t in enumerate(val_loader):
                     self.logger.info(f'Validation iteration {i}')
 
-                    input, pid, target = self._split_validation_batch(t)
+                    input, pid, target = self._split_training_batch(t)
 
                     output, loss, feature_map, channel_weight = self._forward_pass(input, target, mode='val', weight=None)
                     val_losses.update(loss.item(), self._batch_size(input))
@@ -434,28 +398,6 @@ class UNet3DTrainer:
     def _split_training_batch(self, t):
         def _move_to_device(input):
             if isinstance(input, tuple) or isinstance(input, list):
-                if len(input) == 7:
-                    return tuple([_move_to_device(input[0]), input[1], _move_to_device(input[2]), _move_to_device(input[3]),
-                                  _move_to_device(input[4]), _move_to_device(input[5]), _move_to_device(input[6])])
-                else:
-                    return tuple([_move_to_device(input[0]), input[1], _move_to_device(input[2])])
-            else:
-                return input.to(self.device, dtype=torch.float)
-
-        t = _move_to_device(t)
-        if len(t) == 2:
-            input, target = t
-            return input, target
-        elif len(t) == 3:
-            input, pid ,target = t
-            return input, pid, target
-        else:
-            input, pid, target, augmix1, mixlabel1, augmix2, mixlabel2 = t
-            return input, pid, target, augmix1, mixlabel1, augmix2, mixlabel2
-
-    def _split_validation_batch(self, t):
-        def _move_to_device(input):
-            if isinstance(input, tuple) or isinstance(input, list):
 
                 return tuple([_move_to_device(input[0]), input[1], _move_to_device(input[2])])
             else:
@@ -464,12 +406,11 @@ class UNet3DTrainer:
         t = _move_to_device(t)
         if len(t) == 2:
             input, target = t
-            return input, target
         else:
             input, pid, target = t
-            return input, pid, target
+        return input, pid, target
 
-    def _forward_pass(self, input, target, mode='train', weight=None, mix_label=False, augmix=False):
+    def _forward_pass(self, input, target, mode='train', weight=None):
         # forward pass
         output, channel_weight = self.model(input)
         feature_maps = []
@@ -490,77 +431,7 @@ class UNet3DTrainer:
             output = output[0]
         else:
             if weight is None:
-                if mode == 'train':
-                    if augmix:
-                        loss = self.loss_criterion(output, target)
-                        # logits_clean, logits_aug1 = torch.split(output, output[0].size(0))
-                        # # target_clean, mix_label1, mix_label2 = torch.split(target, target[0].size(0))
-                        # loss = self.loss_criterion(logits_clean, target)
-                        # Clamp mixture distribution to avoid exploding KL divergence
-                        # p_clean, p_aug1 = logits_clean.view(logits_clean.shape[0], logits_clean.shape[2],
-                        #                                     logits_clean.shape[3], logits_clean.shape[4]), \
-                        #                   logits_aug1.view(logits_aug1.shape[0], logits_aug1.shape[2], logits_aug1.shape[3],
-                        #                                    logits_aug1.shape[4])
-                        #
-                        # p_mixture = torch.clamp((p_clean + p_aug1) / 2., 1e-7, 1)
-                        # num = (p_mixture > 0.5).sum().float()
-                        # p_mixture = p_mixture.log()
-                        #
-                        # loss_JS = 12 * ((F.kl_div(p_mixture, p_clean, reduction='batchmean') +
-                        #                  F.kl_div(p_mixture, p_aug1, reduction='batchmean')) / 2.) / (num + 0.1)
-                        # self.logger.info(f'JS loss is:{loss_JS.item()}')
-                        # loss = loss + loss_JS
-                    elif mix_label:
-                        with torch.no_grad():
-                            teacher, channel_weight = self.teacher_network(input)
-                            teacher2, channel_weight = self.teacher_network2(input)
-                            teacher3, channel_weight = self.teacher_network3(input)
-                            teacher4, channel_weight = self.teacher_network4(input)
-                        output1 = teacher.detach()
-                        output2 = teacher2.detach()
-                        output3 = teacher3.detach()
-                        output4 = teacher4.detach()
-                        output, channel_weight = self.model(input)
-                        # eval, _ = self.eval_criterion(output1, target)
-                        # beta = 20.0
-                        # alpha = math.ceil(eval*beta)
-                        # if alpha == 0:
-                        #     alpha = 1
-                        # alpha = 0.4
-                        # m = np.float32(np.random.beta(alpha, alpha))
-                        # self.logger.info(f'alpha={alpha} | m={m}')
-
-                        ws = np.float32(np.random.dirichlet([1] * 5))
-                        self.logger.info(f'teacher1={ws[0]} | teacher2={ws[1]} | teacher3={ws[2]} | '
-                                         f'teacher4={ws[3]} | ground truth={ws[4]}')
-                        target2 = ws[0]*output1 + ws[1]*output2 + ws[2]*output3 + ws[3]*output4 + ws[4]*target
-                        loss = self.loss_criterion(output, target2)
-
-                        pred = (target2 > 0.5).float()
-                        feature_maps.append(pred)
-                        targets = torch.cat([target, pred, pred-target], dim=1)
-                        feature_maps.append(targets)
-
-                        if augmix:
-                            # Clamp mixture distribution to avoid exploding KL divergence
-                            p_clean, p_aug1 = logits_clean.view(logits_clean.shape[0], logits_clean.shape[2],
-                                                                logits_clean.shape[3], logits_clean.shape[4]), \
-                                              logits_aug1.view(logits_aug1.shape[0], logits_aug1.shape[2],
-                                                               logits_aug1.shape[3],
-                                                               logits_aug1.shape[4])
-
-                            p_mixture = torch.clamp((p_clean + p_aug1) / 2., 1e-7, 1)
-                            p_clean = (p_clean > 0.5).float()
-                            p_aug1 = (p_aug1 > 0.5).float()
-                            p_mixture = (p_mixture > 0.5).float()
-                            num = (p_mixture > 0.5).sum().float()
-
-                            loss += -((F.kl_div(p_mixture, p_clean, reduction='batchmean') +
-                                       F.kl_div(p_mixture, p_aug1, reduction='batchmean')) / 2.) / (num + 0.1)
-                    else:
-                        loss = self.loss_criterion(output, target)
-                else:
-                    loss = self.loss_criterion(output, target)
+                loss = self.loss_criterion(output, target)
             else:
                 loss = self.loss_criterion(output, target, weight)
 
@@ -594,7 +465,7 @@ class UNet3DTrainer:
             'validate_iters': self.validate_iters
         }, is_best, checkpoint_dir=self.checkpoint_dir,
             logger=self.logger)
-        last_file_path = os.path.join(self.checkpoint_dir, f'epoch{self.num_epoch+1}_model.pkl')
+        last_file_path = os.path.join(self.checkpoint_dir, f'epoch{self.num_epoch+1}_model.pth')
         torch.save(self.model, last_file_path)
 
     def _log_lr(self):

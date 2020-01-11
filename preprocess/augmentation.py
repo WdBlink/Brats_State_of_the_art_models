@@ -146,7 +146,8 @@ def augment3DImage(img, lbl, defaultLabelValues, nnAug, do_rotate=True, rotDegre
 
         # RANDOM INTENSITY SHIFT
         if do_intensityShift:
-            for i in range(4):  # number of channels
+            channel = img.shape[3]
+            for i in range(channel):  # number of channels
                 img[:, :, :, i] = img[:, :, :, i] + np.random.uniform(-maxIntensityShift, maxIntensityShift) #assumes unit std derivation
 
         # RANDOM FLIP

@@ -84,6 +84,50 @@ class Dice:
         return dice_wt, dice_tc, dice_et, sens_wt, sens_tc, sens_et
 
 
+class TwoClassDice:
+    """Computes Dice Coefficient.
+            Generalized to multiple channels by computing per-channel Dice Score
+            (as described in https://arxiv.org/pdf/1707.03237.pdf) and theTn simply taking the average.
+            Input is expected to be probabilities instead of logits.
+            This metric is mostly useful when channels contain the same semantic class (e.g. affinities computed with different offsets).
+            DO NOT USE this metric when training with DiceLoss, otherwise the results will be biased towards the loss.
+            """
+
+    def __init__(self, epsilon=1e-5, ignore_index=None, **kwargs):
+        self.epsilon = epsilon
+        self.ignore_index = ignore_index
+
+    def __call__(self, outputs, labels):
+        """
+        :param input: 5D probability maps torch tensor (NxCxDxHxW)
+        :param target: 4D or 5D ground truth torch tensor. 4D (NxDxHxW) tensor will be expanded to 5D as one-hot
+        :return: Soft Dice Coefficient averaged over all channels/classes
+        """
+        st = outputs
+        s = st.shape
+        st = st.view(s[0], s[2], s[3], s[4])
+
+        stMask = labels
+        s = stMask.shape
+        stMask = stMask.view(s[0], s[2], s[3], s[4])
+
+        dice_st = dice(st, stMask, threshold=0.5)
+
+        sens_st = sensitivity(st, stMask)
+        return dice_st, sens_st
+
+class Reconstruct:
+    def __init__(self, **kwargs):
+        self.zero = 0
+
+    def forward(self, *input):
+        a = input[0]
+        recon_a = input[1]
+        b = input[2]
+        recon_b = input[3]
+        loss = F.mse_loss(a[:, 0:1, :, :, :], recon_a) + F.mse_loss(b[:, 0:1, :, :, :], recon_b)
+        return loss, self.zero
+
 class DiceCoefficient:
     """Computes Dice Coefficient.
     Generalized to multiple channels by computing per-channel Dice Score
