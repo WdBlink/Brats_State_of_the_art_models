@@ -3,6 +3,7 @@ from torch import nn as nn
 from torch.nn import functional as F
 from unet3d.config import load_config
 from torch.nn import init
+import torchvision
 import numpy as np
 from torch.nn.parameter import Parameter
 import math
@@ -800,23 +801,102 @@ class CapsuleLayer(nn.Module):
                             ceil_mode=ceil_mode, return_indices=return_indices)
 
 
+class PriorNet(nn.Module):
+    def __init__(self, inChannels, outChannels, latent_dim):
+        super(PriorNet, self).__init__()
+        self.latent_dim = latent_dim
+        self.levels = 4
+        channels = 20
+        encoderModules = []
+        encoderModules.append(EncoderModule(inChannels, channels, channels, False, True))
+        for i in range(self.levels - 2):
+            encoderModules.append(EncoderModule(channels * pow(2, i), channels * pow(2, i + 1), channels, True, True))
+        encoderModules.append(
+            EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), channels, True, False))
+        self.encoders = nn.ModuleList(encoderModules)
+        self.Conv_fc = torch.nn.Conv3d(2 * self.levels * channels, 2 * latent_dim, 1, bias=True)
+
+    def forward(self, img):
+        encoding = img
+        for encoder in self.encoders:
+            encoding = encoder(encoding)
+        encoding = torch.mean(encoding, dim=[-3, -2, -1], keepdim=True)
+        mu_log_sigma = self.Conv_fc(encoding)
+        mu_log_sigma = torch.squeeze(mu_log_sigma)
+        mu_log_sigma = mu_log_sigma.unsqueeze(dim=0)
+        mu = mu_log_sigma[:, :self.latent_dim]
+        log_sigma = mu_log_sigma[:, self.latent_dim:]
+        return torch.distributions.normal.Normal(loc=mu, scale=log_sigma)
+
+class ReconNet(nn.Module):
+    """
+        A module that carry out vae regularization
+        Args:
+            in_channels (int): number of input channels
+            out_channels (int): number of output channels
+            kernel_size (int): size of the convolving kernel
+            order (string): determines the order of layers, e.g.
+                'cr' -> conv + ReLU
+                'crg' -> conv + ReLU + groupnorm
+            num_groups (int): number of groups for the GroupNorm
+        """
+
+    def __init__(self, input_channels, output_channels, order="cbr", num_groups=8):
+        super(ReconNet, self).__init__()
+        self.conv_block = SingleConv(input_channels, 1, order=order, num_groups=num_groups)
+        self.fcn = nn.Linear(512, 128)
+        self.fcn1 = nn.Linear(128, 64)
+        self.fcn2 = nn.Linear(128, 64)
+        self.fcn3 = nn.Linear(128, 4096)
+        self.conv1 = conv3d(1, 128, kernel_size=1, bias=True, padding=0)
+        # self.greenblock = GreenBlock(128, 128)
+        self.conv2 = conv3d(128, 64, kernel_size=1, bias=True, padding=0)
+        # self.greenblock1 = GreenBlock(64, 64)
+        self.conv3 = conv3d(64, 32, kernel_size=1, bias=True, padding=0)
+        # self.greenblock2 = GreenBlock(32, 32)
+        self.conv4 = conv3d(32, output_channels, kernel_size=1, bias=True, padding=0)
+
+    def forward(self, x):
+        z_mean = self.fcn1(x)
+        z_var = self.fcn2(x)
+        x = self.sampling([z_mean, z_var])
+        x = torch.reshape(x, (-1, 128))
+
+        x = self.fcn3(x)
+        x = torch.reshape(x, (-1, 1, 16, 16, 16))
+        x = self.conv1(x)
+        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
+        # x = self.greenblock(x)
+
+        x = self.conv2(x)
+        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
+        # x = self.greenblock1(x)
+
+        x = self.conv3(x)
+        x = F.upsample(x, size=[2 * x.size(2), 2 * x.size(3), 2 * x.size(4)], mode='trilinear')
+        # x = self.greenblock2(x)
+
+        x = self.conv4(x)
+
+        return x, z_mean, z_var
+
 class EncoderModule(nn.Module):
-    def __init__(self, inChannels, outChannels, maxpool=False, secondConv=True, hasDropout=False):
+    def __init__(self, inChannels, outChannels, channels=30, maxpool=False, secondConv=True, hasDropout=False):
         super(EncoderModule, self).__init__()
-        groups = min(outChannels, 30)
+        groups = min(outChannels, channels)
         self.maxpool = maxpool
         self.secondConv = secondConv
         self.hasDropout = hasDropout
         self.conv1 = nn.Conv3d(inChannels, outChannels, 3, padding=1, bias=False)
         self.gn1 = nn.GroupNorm(groups, outChannels)
-        self.bn = nn.BatchNorm3d(outChannels)
-        self.in1 = nn.InstanceNorm3d(outChannels)
+        # self.bn = nn.BatchNorm3d(outChannels)
+        # self.in1 = nn.InstanceNorm3d(outChannels)
         # self.se = SELayer(outChannels)
         if secondConv:
             self.conv2 = nn.Conv3d(outChannels, outChannels, 3, padding=1, bias=False)
             self.gn2 = nn.GroupNorm(groups, outChannels)
-            self.bn2 = nn.BatchNorm3d(outChannels)
-            self.in2 = nn.InstanceNorm3d(outChannels)
+            # self.bn2 = nn.BatchNorm3d(outChannels)
+            # self.in2 = nn.InstanceNorm3d(outChannels)
         if hasDropout:
             self.dropout = nn.Dropout3d(0.2, True)
 
@@ -834,9 +914,9 @@ class EncoderModule(nn.Module):
 
 
 class DecoderModule(nn.Module):
-    def __init__(self, inChannels, outChannels, upsample=False, firstConv=True):
+    def __init__(self, inChannels, outChannels, channels=30, upsample=False, firstConv=True):
         super(DecoderModule, self).__init__()
-        groups = min(outChannels, 30)
+        groups = min(outChannels, channels)
         self.upsample = upsample
         self.firstConv = firstConv
         if firstConv:

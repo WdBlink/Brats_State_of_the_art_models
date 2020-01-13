@@ -3,7 +3,7 @@ manual_seed: 0
 # model configuration
 model:
   # model class
-  name: NoNewNet
+  name: ProNoNewNet
   # number of input channels to the model
   in_channels: 4
   # number of output channels
@@ -19,7 +19,7 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_GN_NNNetbaseline_LookAhead_batchsize=1_fold4/
+  checkpoint_dir: /home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/test_prob/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # fine-tune a given pre-trained model
@@ -89,10 +89,10 @@ loaders:
   label_internal_path: label
   # paths to the training datasets
   train_path:
-    - '/home/dell/data/Dataset/Brats19/N4bias_Training/N4bias_data_3D_size_160_192_160_res_1.0_1.0_1.0_fold4.hdf5'
+    - '/home/dell/data/Dataset/Brats19/N4bias_Training/N4bias_data_3D_size_160_192_160_res_1.0_1.0_1.0_fold0.hdf5'
   # paths to the validation datasets
   val_path:
-    - '/home/dell/data/Dataset/Brats19/N4bias_Training/N4bias_data_3D_size_160_192_160_res_1.0_1.0_1.0_fold4.hdf5'
+    - '/home/dell/data/Dataset/Brats19/N4bias_Training/N4bias_data_3D_size_160_192_160_res_1.0_1.0_1.0_fold0.hdf5'
   test_path:
     - '/home/dell/data/Dataset/Brats19/validation_process/data_3D.hdf5'
   dataset_path:

@@ -4,7 +4,8 @@ import os
 import torch
 import yaml
 
-DEFAULT_DEVICE = 'cuda:1'
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2"
+DEFAULT_DEVICE = 'cuda:0'
 
 
 def load_config():

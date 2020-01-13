@@ -12,7 +12,7 @@ from unet3d.config import load_config
 from unet3d.losses import get_loss_criterion
 from unet3d.metrics import get_evaluation_metric
 from unet3d.model import get_model
-# from unet3d.trainer import UNet3DTrainer
+
 from unet3d.muticlass_trainer import UNet3DTrainer
 from unet3d.utils import get_logger
 from unet3d.utils import get_number_of_learnable_parameters

@@ -761,7 +761,7 @@ def get_prostate_dataset(config):
 
     logger.info(f'Loading training set from: {train_path}...')
 
-    train_datasets = ProstateDataset(train_path[0], data_aug=loaders_config['data_aug'])
+    train_datasets = ProstateDataset(train_path[0], data_aug=loaders_config['data_aug'], randomCrop=[32, 256, 256])
 
     logger.info(f'Loading validation set from: {val_path}...')
     # brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train
