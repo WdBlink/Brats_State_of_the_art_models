@@ -11,7 +11,7 @@ from tensorboardX import SummaryWriter
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
 from visualization import board_add_images, board_add_image
-
+import random
 from . import utils
 
 config = load_config()
@@ -80,15 +80,15 @@ class UNet3DTrainer:
         # '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_augmix_GN_NNNetbaseline_SE_ET_LookAhead_batchsize=1/epoch113_checkpoint.pytorch'
 
         # fold0 teacher
-        self.teacher_network = torch.load(
-            '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch196_model.pkl', map_location="cpu").to(
-            config['device'])
-        self.teacher_network2 = torch.load(
-            '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch180_model.pkl', map_location="cpu").to(
-            config['device'])
-        self.teacher_network3 = torch.load(
-            '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch146_model.pkl', map_location="cpu").to(
-            config['device'])
+        # self.teacher_network = torch.load(
+        #     '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch196_model.pkl', map_location="cpu").to(
+        #     config['device'])
+        # self.teacher_network2 = torch.load(
+        #     '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch180_model.pkl', map_location="cpu").to(
+        #     config['device'])
+        # self.teacher_network3 = torch.load(
+        #     '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch146_model.pkl', map_location="cpu").to(
+        #     config['device'])
 
         # fold3 teacher
         # self.teacher_network = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_GN_NNNetbaseline_LookAhead_batchsize=1_fold3/epoch193_model.pkl').to(config['device'])
@@ -209,8 +209,10 @@ class UNet3DTrainer:
                 label_tuple = (target, mixlabel1)
                 target = torch.cat(label_tuple, 0)
             else:
-                input, pid, target = self._split_training_batch(t)
+                input, pid, targets = self._split_training_batch(t)
                 images = input
+            subregin = random.randint(0, 2)
+            target = targets[:, subregin:subregin+1, :, :, :]
             output, loss, feature_maps, channel_weight = self._forward_pass(images, target, weight=None,
                                                                             augmix=self.augmix, mix_label=self.labelmix)
 
@@ -254,7 +256,7 @@ class UNet3DTrainer:
                             board_add_image(self.writer, f'feature_map{i}', t, self.num_iterations)
 
                 # compute eval criterion
-                eval_score = self.eval_criterion(output, target)
+                eval_score = self.eval_criterion(output, targets)
                 # train_eval_scores.update(eval_score.item(), self._batch_size(input))
                 train_eval_scores_multi.update(eval_score, self._batch_size(input))
 
@@ -318,69 +320,50 @@ class UNet3DTrainer:
             # set the model in evaluation mode; final_activation doesn't need to be called explicitly
             self.model.eval()
             with torch.no_grad():
-                val_wt = []
-                val_tc = []
-                val_et = []
                 for i, t in enumerate(val_loader):
                     self.logger.info(f'Validation iteration {i}')
 
-                    input, pid, target = self._split_validation_batch(t)
+                    input, pid, targets = self._split_validation_batch(t)
+                    subregin = random.randint(0, 2)
+                    target = targets[:, subregin:subregin + 1, :, :, :]
 
-                    output, loss, feature_map, channel_weight = self._forward_pass(input, target, mode='val',
+                    outputs, loss, feature_map, channel_weight = self._forward_pass(input, target, mode='val',
                                                                                    weight=None)
                     val_losses.update(loss.item(), self._batch_size(input))
+                    for i, output in enumerate(outputs):
+                        eval_score = self.eval_criterion(output, targets)
 
-                    eval_score = self.eval_criterion(output[0], target)
-                    val_wt.append(eval_score[0])
-                    val_tc.append(eval_score[1])
-                    val_et.append(eval_score[2])
-
-                    # print the bad guy
-                    if eval_score[0] < 0.5:
-                        wt_gt = (target[:, 0, ...] == 1).sum()
-                        tc_gt = (target[:, 1, ...] == 1).sum()
-                        et_gt = (target[:, 2, ...] == 1).sum()
-
-                        wt_pred = (output[0][:, 0, ...] >= 0.5).sum()
-                        tc_pred = (output[0][:, 1, ...] >= 0.5).sum()
-                        et_pred = (output[0][:, 2, ...] >= 0.5).sum()
-                        self.logger.info(f'The patient {pid} score is {eval_score}!!!\n'
-                                         f'The pixel of WT_GT|WT_OUT is {wt_gt}|{wt_pred}\n'
-                                         f'The pixel of TC_GT|TC_OUT is {tc_gt}|{tc_pred}\n'
-                                         f'The pixel of ET_GT|ET_OUT is {et_gt}|{et_pred}')
+                        wt_pred = (output >= 0.5).sum()
+                        self.logger.info(f'The patient {pid}!!!\n'
+                                         f'The pred sample ID is {i}\n'
+                                         f'The dice of WT is {eval_score[0]}\n'
+                                         f'The dice of TC is {eval_score[1]}\n'
+                                         f'The dice of ET is {eval_score[2]}\n'
+                                         f'The pixel of Pred is {wt_pred}')
 
                     # val_scores.update(eval_score.item(), self._batch_size(input))
                     val_scores_multi.update(eval_score, self._batch_size(input))
 
                     # visualize the feature map to tensorboard
-                    board_list = [input[0:1, 1:4, :, :, input.size(4)//2], output[0][0:1, :, :, :, output[0].size(4)//2],
-                                  output[1][0:1, :, :, :, output[1].size(4)//2],output[2][0:1, :, :, :, output[2].size(4)//2],
-                                  output[3][0:1, :, :, :, output[3].size(4)//2],target[0:1, :, :, :, target.size(4)//2]]
-                    del output
+                    board_list = [outputs[0][:, :, :, :, outputs[0].size(4)//2],
+                                  outputs[1][:, :, :, :, outputs[1].size(4)//2],
+                                  outputs[2][:, :, :, :, outputs[2].size(4)//2],
+                                  outputs[3][:, :, :, :, outputs[3].size(4)//2],
+                                  targets[:, 0:1, :, :, targets.size(4)//2],
+                                  targets[:, 1:2, :, :, targets.size(4)//2],
+                                  targets[:, 2:3, :, :, targets.size(4)//2]]
                     board_add_images(self.writer, 'validate_output', board_list, self.num_iterations)
 
                     if self.validate_iters is not None and self.validate_iters <= i:
                         # stop validation
                         break
 
-                wt_std = np.std(val_wt)
-                tc_std = np.std(val_tc)
-                et_std = np.std(val_et)
-
-                # self._log_stats('val', val_losses.avg, val_scores.avg)
-                self._log_stats_multi('val', val_losses.avg,
-                                      val_scores_multi.dice_WT, val_scores_multi.dice_TC, val_scores_multi.dice_ET,
-                                      val_scores_multi.sens_WT, val_scores_multi.sens_TC, val_scores_multi.sens_ET)
                 # self.logger.info(f'Validation finished. Loss: {val_losses.avg}. Evaluation score: {val_scores.avg}')
                 self.logger.info(f'Validation finished. \n'
-                                 f'Val Loss: {val_losses.avg} \n'
                                  f'Evaluation score \n'
                                  f'Val WT:{val_scores_multi.dice_WT}\n'
                                  f'Val TC:{val_scores_multi.dice_TC} \n'
                                  f'Val ET:{val_scores_multi.dice_ET} \n'
-                                 f'std WT:{wt_std}\n'
-                                 f'std TC:{tc_std}\n'
-                                 f'std ET:{et_std}\n'
                                  f'sensitivity WT:{val_scores_multi.sens_WT}\n'
                                  f'sensitivity TC:{val_scores_multi.sens_TC}\n'
                                  f'sensitivity ET:{val_scores_multi.sens_ET}')

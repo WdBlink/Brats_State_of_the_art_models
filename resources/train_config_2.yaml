@@ -7,7 +7,7 @@ model:
   # number of input channels to the model
   in_channels: 4
   # number of output channels
-  out_channels: 3
+  out_channels: 1
   # determines the order of operators in a single layer (crg - Conv3d+ReLU+GroupNorm)
   layer_order: cgr
   # feature maps scale factor
@@ -19,7 +19,7 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/test_prob/
+  checkpoint_dir: /home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/test/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # fine-tune a given pre-trained model
@@ -47,14 +47,14 @@ optimizer:
 # loss function configuration
 loss:
   # loss function to be used during training
-  name: DiceLoss_SurfaceLoss
+  name: TwoClassLoss
   # A manual rescaling weight given to each class.
   loss_weight: null
   # a target value that is ignored and does not contribute to the input gradient
   ignore_index: null
 # evaluation metric configuration
 eval_metric:
-  name: Dice
+  name: ProbDice
   # a target label that is ignored during metric evaluation
   ignore_index: null
 lr_scheduler:

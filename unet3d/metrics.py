@@ -84,6 +84,16 @@ class Dice:
         return dice_wt, dice_tc, dice_et, sens_wt, sens_tc, sens_et
 
 
+class ProbDice:
+    def __init__(self, epsilon=1e-5, ignore_index=None, **kwargs):
+        self.two_class_dice = TwoClassDice()
+    def __call__(self, outputs, labels):
+        dice_wt, sens_wt = self.two_class_dice(outputs, labels[:, 0:1, :, :, :])
+        dice_tc, sens_tc = self.two_class_dice(outputs, labels[:, 1:2, :, :, :])
+        dice_et, sens_et = self.two_class_dice(outputs, labels[:, 2:3, :, :, :])
+        return dice_wt, dice_tc, dice_et, sens_wt, sens_tc, sens_et
+
+
 class TwoClassDice:
     """Computes Dice Coefficient.
             Generalized to multiple channels by computing per-channel Dice Score
