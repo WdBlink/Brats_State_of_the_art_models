@@ -1,15 +1,10 @@
 [![DOI](https://zenodo.org/badge/149826542.svg)](https://zenodo.org/badge/latestdoi/149826542)
 
-# pytorch-3dunet
+# label-mixup
 
-PyTorch implementation of a standard 3D U-Net based on:
+Our baseline model is [NNUnet](https://arxiv.org/abs/1809.10483) and the implementation is based on:
 
-[3D U-Net: Learning Dense Volumetric Segmentation from Sparse Annotation](https://arxiv.org/abs/1606.06650) 
-Özgün Çiçek et al.
-
-as well as Residual 3D U-Net based on:
-
-[Superhuman Accuracy on the SNEMI3D Connectomics Challenge](https://arxiv.org/pdf/1706.00120.pdf) Kisuk Lee et al.
+https://github.com/RobinBruegger/PartiallyReversibleUnet
 
 ## Prerequisites
 - Linux
@@ -26,11 +21,12 @@ as well as Residual 3D U-Net based on:
 - scipy 
 - scikit-image
 - pytest
+- nibabel
 
 Setup a new conda environment with the required dependencies via:
 ```
 conda create -n 3dunet pytorch torchvision tensorboardx h5py scipy scikit-image pyyaml pytest -c conda-forge -c pytorch
-``` 
+```
 Activate newly created conda environment via:
 ```
 source activate 3dunet
@@ -63,20 +59,43 @@ e.g. one class having at lease 3 orders of magnitude more voxels than the others
 
 If not specified `MeanIoU` will be used by default.
 
+## Proprecess
+
+1. Install [ANTs N4BiasFieldCorrection](https://github.com/stnava/ANTs/releases) and add the location of the ANTs binaries to the PATH environmental variable.
+2. Add the repository directory to the `PYTONPATH` system variable:
+
+```
+$ export PYTHONPATH=${PWD}:$PYTHONPATH
+```
+
+3. Import the conversion function and run the preprocessing:
+
+```
+$ python
+>>> from preprocess/preprocess.py import convert_brats_data
+>>> convert_brats_data("data/original", "data/preprocessed")
+```
+
+4. Generate HDF5 training datasets:
+
+```
+python datasets/brats_data_loader.py
+```
+
+5. Generate HDF5 validation datasets:
+
+```
+python datasets/brats18_validation_data_loader.py
+```
+
 ## Train
-E.g. fit to randomly generated 3D volume and random segmentation mask from [random_label3D.h5](resources/random_label3D.h5) run:
-```
-python train.py --config resources/train_config_ce.yaml # train with CrossEntropyLoss
-```
-or:
-
-```
-python train.py --config resources/train_config_dice.yaml # train with DiceLoss
+```yaml
+python train.py --config resources/train_config_2.yaml 
 ```
 
-See the [train_config_ce.yaml](resources/train_config_ce.yaml) for more info.
+See the [train_config_2.yaml](resources/train_config_2.yaml) for more info.
 
-In order to train on your own data just provide the paths to your HDF5 training and validation datasets in the [train_config_ce.yaml](resources/train_config_ce.yaml).
+In order to train on your own data just provide the paths to your HDF5 training and validation datasets in the [train_config_2.yaml](resources/train_config_2.yaml).
 The HDF5 files should contain the raw/label data sets in the following axis order: `DHW` (in case of 3D) `CDHW` (in case of 4D).
 
 Monitor progress with Tensorboard `tensorboard --logdir ./3dunet/logs/ --port 8666` (you need `tensorflow` installed in your conda env).
@@ -92,15 +111,9 @@ When training with cross entropy based losses (`WeightedCrossEntropyLoss`, `Cros
 ## Test
 Test on randomly generated 3D volume (just for demonstration purposes) from [random_label3D.h5](resources/random_label3D.h5). 
 ```
-python predict.py --config resources/test_config_ce.yaml
+python test.py --config resources/train_config_2.yaml
 ```
-or if you trained with `DiceLoss`:
-```
-python predict.py --config resources/test_config_dice.yaml
-```
-Prediction masks will be saved to `resources/random_label3D_probabilities.h5`.
-
-In order to predict your own raw dataset provide the path to your model as well as paths to HDF5 test datasets in the [test_config_ce.yaml](resources/test_config_ce.yaml).
+Prediction masks will be saved to `pred_path` defined in the `train_config_.yaml`
 
 ### Prediction tips
 In order to avoid block artifacts in the output prediction masks the patch predictions are averaged, so make sure that `patch/stride` params lead to overlapping blocks, e.g. `patch: [64 128 128] stride: [32 96 96]` will give you a 'halo' of 32 voxels in each direction.
