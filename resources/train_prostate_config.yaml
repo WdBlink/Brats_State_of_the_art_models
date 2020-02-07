@@ -19,9 +19,9 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/dell/data/Dataset/prostate_raw/checkpoint/baseline_nnUnet/
+  checkpoint_dir: /home/dell/data/Dataset/prostate_raw/checkpoint/teacher*2_nnUnet/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
-  resume: /home/dell/data/Dataset/prostate_raw/checkpoint/baseline_nnUnet/best_checkpoint.pytorch
+  resume: null
   # fine-tune a given pre-trained model
   pre_trained: null
   # output test result model

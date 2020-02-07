@@ -74,7 +74,9 @@ class UNet3DTrainer:
         self.validate_iters = validate_iters
         self.eval_score_higher_is_better = eval_score_higher_is_better
         self.augmix = False
-        self.labelmix = False
+        self.labelmix = True
+        self.teacher_network = torch.load('/home/dell/data/Dataset/prostate_raw/checkpoint/baseline_nnUnet/epoch367_model.pkl').to(config['device'])
+        self.teacher_network2 = torch.load('/home/dell/data/Dataset/prostate_raw/checkpoint/baseline_nnUnet/epoch368_model.pkl').to(config['device'])
         logger.info(f'eval_score_higher_is_better: {eval_score_higher_is_better}')
 
         if best_eval_score is not None:
@@ -254,9 +256,8 @@ class UNet3DTrainer:
                 elif self.labelmix:
                     target2 = feature_maps[0]
                     mix_target = feature_maps[1]
-                    board_list = [input[0:1, 1:4, :, :, input.size(4) // 2], output[0:1, :, :, :, output.size(4) // 2],
-                                  target[0:1, :, :, :, target.size(4) // 2], target2[0:1, :, :, :, target.size(4) // 2],
-                                  mix_target[0:1, :, :, :, mix_target.size(4) // 2]]
+                    board_list = [input[0:1, :, input.size(2) // 2, :, :], output[0:1, :, output.size(2) // 2, :, :],
+                                  target[0:1, :, target.size(2) // 2, :, :], target2[0:1, :, target.size(2) // 2, :, :]]
                     board_add_images(self.writer, 'train_output', board_list, self.num_iterations)
                 else:
                     board_list = [input[0:1, :, input.size(2) // 2, :, :], output[0:1, :, output.size(2) // 2, :, :],
@@ -507,13 +508,8 @@ class UNet3DTrainer:
                         with torch.no_grad():
                             teacher, channel_weight = self.teacher_network(input)
                             teacher2, channel_weight = self.teacher_network2(input)
-                            teacher3, channel_weight = self.teacher_network3(input)
-                            teacher4, channel_weight = self.teacher_network4(input)
                         output1 = teacher.detach()
                         output2 = teacher2.detach()
-                        output3 = teacher3.detach()
-                        output4 = teacher4.detach()
-                        output, channel_weight = self.model(input)
                         # eval, _ = self.eval_criterion(output1, target)
                         # beta = 20.0
                         # alpha = math.ceil(eval*beta)
@@ -523,10 +519,9 @@ class UNet3DTrainer:
                         # m = np.float32(np.random.beta(alpha, alpha))
                         # self.logger.info(f'alpha={alpha} | m={m}')
 
-                        ws = np.float32(np.random.dirichlet([1] * 5))
-                        self.logger.info(f'teacher1={ws[0]} | teacher2={ws[1]} | teacher3={ws[2]} | '
-                                         f'teacher4={ws[3]} | ground truth={ws[4]}')
-                        target2 = ws[0]*output1 + ws[1]*output2 + ws[2]*output3 + ws[3]*output4 + ws[4]*target
+                        ws = np.float32(np.random.dirichlet([1] * 3))
+                        self.logger.info(f'teacher1={ws[0]} | teacher2={ws[1]} | ground truth={ws[2]}')
+                        target2 = ws[0]*output1 + ws[1]*output2 + ws[2]*target
                         loss = self.loss_criterion(output, target2)
 
                         pred = (target2 > 0.5).float()

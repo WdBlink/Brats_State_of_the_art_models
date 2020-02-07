@@ -3,7 +3,7 @@ import os
 import torch
 import torch.nn as nn
 from datasets.hdf5 import BratsDataset
-from unet3d.model import get_model
+# from unet3d.model import get_model
 from unet3d import utils
 from tqdm import tqdm
 import numpy as np
@@ -43,10 +43,14 @@ logger.info(f"Sending the model to '{config['device']}'")
 # model10 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/test/epoch29_model.pkl').to(config['device'])
 # model11 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_GN_NNNetbaseline_LookAhead_batchsize=1_fold1/epoch111_model.pkl').to(config['device'])
 
-model1 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch196_model.pkl').to(config['device'])
-model2 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch180_model.pkl').to(config['device'])
-model3 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch146_model.pkl').to(config['device'])
-model4 = torch.load( '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_GN_NNNetbaseline_LookAhead_batchsize=1_fold4/epoch153_model.pkl').to(config['device'])
+# model1 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch196_model.pkl').to(config['device'])
+# model2 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch180_model.pkl').to(config['device'])
+model3 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch146_model.pkl', map_location="cpu").to(config['device'])
+# model4 = torch.load( '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_GN_NNNetbaseline_LookAhead_batchsize=1_fold4/epoch153_model.pkl').to(config['device'])
+model5 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_GN_NNNetbaseline_LookAhead_batchsize=1_fold4/epoch166_model.pkl').to(config['device'])
+# model16 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_newbias_teachernetwork*3_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch75_model.pkl').to(config['device'])
+model17 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_newbias_teachernetwork*3_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch57_model.pkl', map_location="cpu").to(config['device'])
+model18 = torch.load('/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_newbias_teachernetwork*3_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch83_model.pkl', map_location="cpu").to(config['device'])
 predictionsBasePath = config['loaders']['pred_path']
 BRATS_VAL_PATH = config['loaders']['test_path']
 
@@ -56,7 +60,7 @@ challenge_loader = loaders['challenge']
 
 def makePredictions(challenge_loader):
     # model is already loaded from disk by constructor
-    basePath = os.path.join(predictionsBasePath[0])
+    basePath = os.path.join(predictionsBasePath[0] + f"/model3,5,17,18")
     if not os.path.exists(basePath):
         os.makedirs(basePath)
     with torch.no_grad():
@@ -66,7 +70,7 @@ def makePredictions(challenge_loader):
             inputs = inputs.to(config['device'])
 
             output_ensemble = 0
-            for i, model in enumerate([model1, model2, model3, model4]):
+            for i, model in enumerate([model18, model3, model5, model17]):
                 model.eval()
                 # predict labels and bring into required shape
                 outputs, _ = model(inputs)

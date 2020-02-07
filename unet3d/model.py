@@ -11,7 +11,7 @@ from unet3d.buildingblocks import conv3d, Encoder, Decoder, FinalConv, DoubleCon
     ExtResNetBlock, SingleConv, GreenBlock, DownBlock, UpBlock, VaeBlock, CaeBlock, unetUp, unetConv3, \
     EncoderModule, DecoderModule, ResEncoderModule, ResDecoderModule, \
     UnetConv3, UnetUp3_CT, UnetGridGatingSignal3, UnetDsv3, GridAttentionBlockND, \
-    MedicaNetBasicBlock, MedicaNetBottleneck, SELayer, CapsuleLayer, OctaveConv, Conv_BN, Conv_BN_ACT
+    MedicaNetBasicBlock, MedicaNetBottleneck, SELayer, CapsuleLayer, OctaveConv, Conv_BN, Conv_BN_ACT, PriorNet
 
 from unet3d.utils import create_feature_maps
 import torch.nn.functional as F
@@ -1351,6 +1351,98 @@ class NoNewNet(nn.Module):
         x = self.lastConv(x)
         x = torch.sigmoid(x)
         return x, []
+
+
+class ProNoNewNet(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, latent_dim=6, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(ProNoNewNet, self).__init__()
+        channels = 20
+        self.NNunet = NNNet(in_channels=in_channels, out_channels=30, final_sigmoid=True)
+        self.lastConv = nn.Conv3d(30 + latent_dim, out_channels, 1, bias=True)
+        self.posterior_net = PriorNet(inChannels=5, outChannels=channels, latent_dim=latent_dim)
+        self.prior_net = PriorNet(inChannels=4, outChannels=channels, latent_dim=latent_dim)
+
+    def forward(self, x, seg, mode='train'):
+        # x, y_out = self.se(x)
+        feature = self.NNunet(x)
+        if mode == 'train':
+            z_q = self.posterior_net(torch.cat([x, seg], dim=1))
+            z_p = self.prior_net(x)
+            kl = torch.mean(torch.distributions.kl.kl_divergence(z_q, z_p))
+            sample_q = z_q.sample()
+            if len(sample_q.size()) == 2:
+                sample_q = torch.unsqueeze(sample_q, dim=2)
+                sample_q = torch.unsqueeze(sample_q, dim=2)
+                sample_q = torch.unsqueeze(sample_q, dim=2)
+
+            shp = feature.size()
+            spatial_shape = [shp[axis] for axis in [2, 3, 4]]
+            multiples = [1] + spatial_shape
+            multiples.insert(1, 1)
+            recon_q = sample_q.repeat(multiples)
+            x = torch.cat([feature, recon_q], dim=1)
+            x = self.lastConv(x)
+            x = torch.sigmoid(x)
+            return x, [], kl
+        else:
+            pred = []
+            for i in range(5):
+                img = x
+                sample_p = self.prior_net(img).sample()
+                if len(sample_p.size()) == 2:
+                    sample_p = torch.unsqueeze(sample_p, dim=2)
+                    sample_p = torch.unsqueeze(sample_p, dim=2)
+                    sample_p = torch.unsqueeze(sample_p, dim=2)
+                shp = feature.size()
+                spatial_shape = [shp[axis] for axis in [2, 3, 4]]
+                multiples = [1] + spatial_shape
+                multiples.insert(1, 1)
+                recon_p = sample_p.repeat(multiples)
+                img = torch.cat([feature, recon_p], dim=1)
+                img = self.lastConv(img)
+                img = torch.sigmoid(img)
+                pred.append(img)
+            del img
+            return pred, []
+
+
+class NNNet(nn.Module):
+    def __init__(self, in_channels, out_channels, final_sigmoid, f_maps=64, layer_order='crg', num_groups=8,
+                 **kwargs):
+        super(NNNet, self).__init__()
+        channels = out_channels
+        self.levels = 5
+
+        # create encoder levels
+        encoderModules = []
+        encoderModules.append(EncoderModule(in_channels, channels, channels, False, True))
+        for i in range(self.levels - 2):
+            encoderModules.append(EncoderModule(channels * pow(2, i), channels * pow(2, i+1), channels, True, True))
+        encoderModules.append(EncoderModule(channels * pow(2, self.levels - 2), channels * pow(2, self.levels - 1), channels, True, False))
+        self.encoders = nn.ModuleList(encoderModules)
+
+        # create decoder levels
+        decoderModules = []
+        decoderModules.append(DecoderModule(channels * pow(2, self.levels - 1), channels * pow(2, self.levels - 2), channels, True, False))
+        for i in range(self.levels - 2):
+            decoderModules.append(DecoderModule(channels * pow(2, self.levels - i - 2), channels * pow(2, self.levels - i - 3), channels, True, True))
+        decoderModules.append(DecoderModule(channels, channels, channels, False, True))
+        self.decoders = nn.ModuleList(decoderModules)
+
+    def forward(self, x):
+        # x, y_out = self.se(x)
+        inputStack = []
+        for i in range(self.levels):
+            x = self.encoders[i](x)
+            if i < self.levels - 1:
+                inputStack.append(x)
+
+        for i in range(self.levels):
+            x = self.decoders[i](x)
+            if i < self.levels - 1:
+                x = x + inputStack.pop()
+        return x
 
 
 class ResNoNewNet(nn.Module):
