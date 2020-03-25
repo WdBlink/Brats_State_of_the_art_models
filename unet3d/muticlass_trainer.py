@@ -74,7 +74,7 @@ class UNet3DTrainer:
         self.validate_iters = validate_iters
         self.eval_score_higher_is_better = eval_score_higher_is_better
         self.augmix = False
-        self.labelmix = False
+        self.labelmix = True
         # '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_augmix_GN_NNNetbaseline_SE_ET_LookAhead_batchsize=1/epoch135_checkpoint.pytorch'\
         # '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_augmix_GN_NNNetbaseline_SE_ET_LookAhead_batchsize=1/epoch176_checkpoint.pytorch'\
         # '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_augmix_GN_NNNetbaseline_SE_ET_LookAhead_batchsize=1/epoch113_checkpoint.pytorch'

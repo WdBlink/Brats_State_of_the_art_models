@@ -1360,7 +1360,7 @@ class ProNoNewNet(nn.Module):
         channels = 20
         self.NNunet = NNNet(in_channels=in_channels, out_channels=30, final_sigmoid=True)
         self.lastConv = nn.Conv3d(30 + latent_dim, out_channels, 1, bias=True)
-        self.posterior_net = PriorNet(inChannels=5, outChannels=channels, latent_dim=latent_dim)
+        self.posterior_net = PriorNet(inChannels=7, outChannels=channels, latent_dim=latent_dim)
         self.prior_net = PriorNet(inChannels=4, outChannels=channels, latent_dim=latent_dim)
 
     def forward(self, x, seg, mode='train'):
