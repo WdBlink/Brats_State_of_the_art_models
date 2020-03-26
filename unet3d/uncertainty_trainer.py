@@ -82,10 +82,10 @@ class UNet3DTrainer:
 
         # fold0 teacher
         self.teacher_network = torch.load(
-            '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch196_model.pkl', map_location="cpu").to(
+            '/home/server/data/BraTS19/epoch196_model.pkl', map_location="cpu").to(
             config['device'])
         self.teacher_network2 = torch.load(
-            '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch180_model.pkl', map_location="cpu").to(
+            '/home/server/data/BraTS19/epoch180_model.pkl', map_location="cpu").to(
             config['device'])
         # self.teacher_network3 = torch.load(
         #     '/home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/muticlass_mixlabel_teacher*2_GN_NNNetbaseline_LookAhead_batchsize=1_fold0/epoch146_model.pkl', map_location="cpu").to(
@@ -490,7 +490,7 @@ class UNet3DTrainer:
                 ws = np.float32(np.random.dirichlet([1] * 3))
                 self.logger.info(f'teacher1={ws[0]} | teacher2={ws[1]} | ground truth={ws[2]}')
                 target2 = ws[0] * output1 + ws[1] * output2 + ws[2] * target
-                loss = self.loss_criterion(output, target2) + 0.005*KL + 0.005*reg_loss
+                loss = self.loss_criterion(output, target2) + 0.01*KL + 0.001*reg_loss
 
                 mix_result = (target2 > 0.5).float()
                 feature_maps.append(mix_result)

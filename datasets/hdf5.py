@@ -235,8 +235,9 @@ class BratsDataset(torch.utils.data.Dataset):
         self.sigma = 10
         self.doIntensityShift = True
         self.maxIntensityShift = 0.1
-        graph_brain, _, _ = load_nii(template)
-        self.graph_brain = np.transpose(graph_brain, (1, 2, 3, 0))
+        if template is not None:
+            graph_brain, _, _ = load_nii(template)
+            self.graph_brain = np.transpose(graph_brain, (1, 2, 3, 0))
         self.augmix = augmix
 
     def __getitem__(self, index):
@@ -705,21 +706,21 @@ def get_brats_train_loaders(config):
     #                               transformer_config=loaders_config['transformer'],
     #                               is_mixup=loaders_config['mixup'])
     train_datasets = BratsDataset(train_path[0], doMixUp=loaders_config['mixup'],
-                                  data_aug=loaders_config['data_aug'], randomCrop=[128, 128, 128], template=loaders_config['template_path'][0])
+                                  data_aug=loaders_config['data_aug'], randomCrop=[128, 128, 128], template=None)
 
     logger.info(f'Loading validation set from: {val_path}...')
     # brats = BraTS.DataSet(brats_root=data_paths[0], year=2019).train
     # val_datasets = BraTSDataset(brats, validation_ids, phase='val',
     #                             transformer_config=loaders_config['transformer'],
     #                             is_mixup=False)
-    val_datasets = BratsDataset(val_path[0], mode='validation', template=loaders_config['template_path'][0])
+    val_datasets = BratsDataset(val_path[0], mode='validation', template=None)
 
     num_workers = loaders_config.get('num_workers', 1)
     logger.info(f'Number of workers for train/val datasets: {num_workers}')
     # when training with volumetric data use batch_size of 1 due to GPU memory constraints
 
     challengeValset = BratsDataset(loaders_config['test_path'][0], mode="validation", hasMasks=False,
-                                   returnOffsets=True, template=loaders_config['template_path'][0])
+                                   returnOffsets=True, template=None)
 
     return {
         'train': DataLoader(train_datasets, batch_size=loaders_config['batch_size'], shuffle=True, num_workers=num_workers),
