@@ -13,6 +13,7 @@ from tqdm import tqdm
 from visualization import board_add_images, board_add_image
 import random
 from . import utils
+from prob_unet.utils import l2_regularisation
 
 config = load_config()
 
@@ -285,6 +286,7 @@ class UNet3DTrainer:
 
         # evaluate on validation set
         eval_score = self.validate(self.loaders['val'])
+
         # adjust learning rate if necessary
         # if isinstance(self.scheduler, ReduceLROnPlateau):
         # self.scheduler.step(eval_score)
@@ -330,7 +332,6 @@ class UNet3DTrainer:
                     outputs, loss, feature_map, channel_weight = self._forward_pass(input, target, mode='val',
                                                                                     weight=None)
                     val_losses.update(loss.item(), self._batch_size(input))
-                    
                     ensemble_out = 0
                     for i, output in enumerate(outputs):
                         eval_score = self.eval_criterion(output, targets)
@@ -460,99 +461,75 @@ class UNet3DTrainer:
 
     def _forward_pass(self, input, target, mode='train', weight=None, mix_label=False, augmix=False):
         # forward pass
-        if mode == 'train':
-            output, channel_weight, KL = self.model(input, target)
-        else:
-            output, channel_weight = self.model(input, None, mode='val')
         feature_maps = []
-        # compute the loss
-        if self.model_name == 'NvNet':
-            loss = self.loss_criterion(input, output[0], output[1], target)
-            output = output[0][:, :3, :, :, :]
-        elif self.model_name == 'NNNet_Cae':
-            loss = self.loss_criterion(input, target, output[0], output[1])
-            if mode == 'train':
-                cae_out = output[1]
-                for i, t in enumerate(output[2]):
-                    size = t.size(4)
-                    channel = t.size(1)
-                    t = torch.sum(t, dim=1, keepdim=True) // channel
-                    feature_maps.append(t[:, :, :, :, size // 2])
-                feature_maps.append(cae_out[:, :, :, :, cae_out.size(4) // 2])
-            output = output[0]
-        else:
-            if mode == 'train':
-                if augmix:
-                    loss = self.loss_criterion(output, target)
-                    # logits_clean, logits_aug1 = torch.split(output, output[0].size(0))
-                    # # target_clean, mix_label1, mix_label2 = torch.split(target, target[0].size(0))
-                    # loss = self.loss_criterion(logits_clean, target)
-                    # Clamp mixture distribution to avoid exploding KL divergence
-                    # p_clean, p_aug1 = logits_clean.view(logits_clean.shape[0], logits_clean.shape[2],
-                    #                                     logits_clean.shape[3], logits_clean.shape[4]), \
-                    #                   logits_aug1.view(logits_aug1.shape[0], logits_aug1.shape[2], logits_aug1.shape[3],
-                    #                                    logits_aug1.shape[4])
-                    #
-                    # p_mixture = torch.clamp((p_clean + p_aug1) / 2., 1e-7, 1)
-                    # num = (p_mixture > 0.5).sum().float()
-                    # p_mixture = p_mixture.log()
-                    #
-                    # loss_JS = 12 * ((F.kl_div(p_mixture, p_clean, reduction='batchmean') +
-                    #                  F.kl_div(p_mixture, p_aug1, reduction='batchmean')) / 2.) / (num + 0.1)
-                    # self.logger.info(f'JS loss is:{loss_JS.item()}')
-                    # loss = loss + loss_JS
-                if mix_label:
-                    with torch.no_grad():
-                        teacher, channel_weight = self.teacher_network(input)
-                        teacher2, channel_weight = self.teacher_network2(input)
-                        # teacher3, channel_weight = self.teacher_network3(input)
-                    output1 = teacher.detach()
-                    output2 = teacher2.detach()
-                    # output3 = teacher3.detach()
+        self.model.forward(input, target, training=True)
+        output, KL = self.model.elbo(target)
+        reg_loss = l2_regularisation(self.model.posterior) + l2_regularisation(self.model.prior) + l2_regularisation(self.model.fcomb.layers)
 
-                    # output1 = output
-                    # eval = self.eval_criterion(output1, target)
-                    # beta = 20.0
-                    # alpha = math.ceil(eval[2]*beta)
-                    # if alpha == 0:
-                    #     alpha = 1
-                    # # alpha = 0.4
-                    # m = np.float32(np.random.beta(alpha, beta))
-                    # self.logger.info(f'alpha={alpha} | m={m}')
-                    # target2 = m * output1 + (1-m)*target
+        if mode == 'train':
+            if mix_label:
+                with torch.no_grad():
+                    teacher, channel_weight = self.teacher_network(input)
+                    teacher2, channel_weight = self.teacher_network2(input)
+                    # teacher3, channel_weight = self.teacher_network3(input)
+                output1 = teacher.detach()
+                output2 = teacher2.detach()
+                # output3 = teacher3.detach()
 
-                    ws = np.float32(np.random.dirichlet([1] * 3))
-                    self.logger.info(f'teacher1={ws[0]} | teacher2={ws[1]} | ground truth={ws[2]}')
-                    target2 = ws[0] * output1 + ws[1] * output2 + ws[2] * target
-                    loss = self.loss_criterion(output, target2)
+                # output1 = output
+                # eval = self.eval_criterion(output1, target)
+                # beta = 20.0
+                # alpha = math.ceil(eval[2]*beta)
+                # if alpha == 0:
+                #     alpha = 1
+                # # alpha = 0.4
+                # m = np.float32(np.random.beta(alpha, beta))
+                # self.logger.info(f'alpha={alpha} | m={m}')
+                # target2 = m * output1 + (1-m)*target
 
-                    pred = (target2 > 0.5).float()
-                    feature_maps.append(pred)
-                    targets = torch.cat([target, pred, pred - target], dim=1)
-                    feature_maps.append(targets)
+                ws = np.float32(np.random.dirichlet([1] * 3))
+                self.logger.info(f'teacher1={ws[0]} | teacher2={ws[1]} | ground truth={ws[2]}')
+                target2 = ws[0] * output1 + ws[1] * output2 + ws[2] * target
+                loss = self.loss_criterion(output, target2) + 0.005*KL + 0.005*reg_loss
 
-                    # if augmix:
-                    #     # Clamp mixture distribution to avoid exploding KL divergence
-                    #     p_clean, p_aug1 = logits_clean.view(logits_clean.shape[0], logits_clean.shape[2],
-                    #                                         logits_clean.shape[3], logits_clean.shape[4]), \
-                    #                       logits_aug1.view(logits_aug1.shape[0], logits_aug1.shape[2],
-                    #                                        logits_aug1.shape[3],
-                    #                                        logits_aug1.shape[4])
-                    #
-                    #     p_mixture = torch.clamp((p_clean + p_aug1) / 2., 1e-7, 1)
-                    #     p_clean = (p_clean > 0.5).float()
-                    #     p_aug1 = (p_aug1 > 0.5).float()
-                    #     p_mixture = (p_mixture > 0.5).float()
-                    #     num = (p_mixture > 0.5).sum().float()
-                    #
-                    #     loss += -((F.kl_div(p_mixture, p_clean, reduction='batchmean') +
-                    #                F.kl_div(p_mixture, p_aug1, reduction='batchmean')) / 2.) / (num + 0.1)
-                else:
-                    loss = self.loss_criterion(output, target) + 0.01 * KL
+                mix_result = (target2 > 0.5).float()
+                feature_maps.append(mix_result)
+                targets = torch.cat([target, mix_result, mix_result - target], dim=1)
+                feature_maps.append(targets)
+
+                # if augmix:
+                #     # Clamp mixture distribution to avoid exploding KL divergence
+                #     p_clean, p_aug1 = logits_clean.view(logits_clean.shape[0], logits_clean.shape[2],
+                #                                         logits_clean.shape[3], logits_clean.shape[4]), \
+                #                       logits_aug1.view(logits_aug1.shape[0], logits_aug1.shape[2],
+                #                                        logits_aug1.shape[3],
+                #                                        logits_aug1.shape[4])
+                #
+                #     p_mixture = torch.clamp((p_clean + p_aug1) / 2., 1e-7, 1)
+                #     p_clean = (p_clean > 0.5).float()
+                #     p_aug1 = (p_aug1 > 0.5).float()
+                #     p_mixture = (p_mixture > 0.5).float()
+                #     num = (p_mixture > 0.5).sum().float()
+                #
+                #     loss += -((F.kl_div(p_mixture, p_clean, reduction='batchmean') +
+                #                F.kl_div(p_mixture, p_aug1, reduction='batchmean')) / 2.) / (num + 0.1)
             else:
-                loss = self.loss_criterion(output[0], target)
+                loss = self.loss_criterion(output, target) + 10.0 * KL + 1e-5*reg_loss
+        else:
+            self.model.forward(input, segm=None, training=False)
+            num_preds = 5
+            predictions = []
+            ensemble_mask = 0
+            for i in range(num_preds):
+                mask_pred = self.model.sample(testing=True)
+                # mask_pred = (torch.sigmoid(mask_pred) > 0.5).float()
+                # mask_pred = torch.squeeze(mask_pred, 0)
+                predictions.append(mask_pred)
+                ensemble_mask = ensemble_mask + mask_pred
+            output = predictions
+            loss = self.loss_criterion(ensemble_mask/float(num_preds), target)
 
-        return output, loss, feature_maps, channel_weight
+        return output, loss, feature_maps, 0
 
     def _is_best_eval_score(self, eval_score):
         if self.eval_score_higher_is_better:

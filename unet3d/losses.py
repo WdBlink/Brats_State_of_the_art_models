@@ -376,7 +376,7 @@ class SurfaceLoss(nn.Module):
 
     def __call__(self, probs: Tensor, dist_maps: Tensor) -> Tensor:
         probs = self.normalization(probs)
-        assert simplex(probs)
+        # assert simplex(probs)
         # assert not one_hot(dist_maps)
 
         pc = probs[:, :, ...].type(torch.float32)

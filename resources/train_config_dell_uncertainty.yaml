@@ -3,7 +3,7 @@ manual_seed: 0
 # model configuration
 model:
   # model class
-  name: ProNoNewNet
+  name: ProbabilisticUnet
   # number of input channels to the model
   in_channels: 4
   # number of output channels
@@ -19,7 +19,7 @@ model:
 # trainer configuration
 trainer:
   # path to the checkpoint directory
-  checkpoint_dir: /home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/ProNoNewNet_labelmixup/
+  checkpoint_dir: /home/dell/data/Dataset/Brats19/pytorch-3dunet/checkpoints/ProbabilisticUnet_labelmixup/
   # path to latest checkpoint; if provided the training will be resumed from that checkpoint
   resume: null
   # fine-tune a given pre-trained model

@@ -330,7 +330,10 @@ class Noise2NoiseUNet3D(nn.Module):
 
 def get_model(config):
     def _model_class(class_name):
-        m = importlib.import_module('unet3d.model')
+        if class_name == 'ProbabilisticUnet':
+            m = importlib.import_module('prob_unet.probabilistic_unet')
+        else:
+            m = importlib.import_module('unet3d.model')
         clazz = getattr(m, class_name)
         return clazz
 
